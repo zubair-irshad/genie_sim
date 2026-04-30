@@ -1,0 +1,412 @@
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+
+@dataclass
+class CameraSpec:
+    prim_path: str
+    resolution: tuple[int, int]
+    focal_length: float
+    horizontal_aperture: float
+    vertical_aperture: float
+
+
+def launch_renderer(headless: bool = True, renderer_type: str = "raytraced") -> "GenieSimRenderer":
+    """Launch Isaac Sim first, then construct the renderer wrapper.
+
+    All `isaacsim`, `omni`, and `pxr` imports used by the renderer happen after
+    this function creates `SimulationApp`.
+    """
+
+    from isaacsim import SimulationApp
+
+    kit_renderer = "RayTracedLighting"
+    if renderer_type.lower() in {"pathtraced", "path_traced", "realtimepathtracing"}:
+        kit_renderer = "RealTimePathTracing"
+
+    simulation_app = SimulationApp({"headless": headless, "renderer": kit_renderer})
+    simulation_app._carb_settings.set("/omni/replicator/asyncRendering", False)
+    simulation_app._carb_settings.set("/app/asyncRendering", False)
+    return GenieSimRenderer(simulation_app, renderer_type=renderer_type)
+
+
+class GenieSimRenderer:
+    """Isaac Sim + Replicator renderer for paired DiffusionHarmonizer data."""
+
+    def __init__(self, simulation_app: Any, renderer_type: str = "raytraced"):
+        from isaacsim.core.api import World
+        import omni.replicator.core as rep
+        import omni.usd
+
+        self._app = simulation_app
+        self._rep = rep
+        self._omni_usd = omni.usd
+        self.world = World(stage_units_in_meters=1.0)
+        self.stage = self.world.stage
+        self.renderer_type = renderer_type
+        self.render_products: dict[str, Any] = {}
+        self.annotators: dict[str, dict[str, Any]] = {}
+        self.cameras: dict[str, CameraSpec] = {}
+        self._configure_rtx(renderer_type)
+
+    def _settings(self):
+        import carb
+
+        return carb.settings.get_settings()
+
+    def _configure_rtx(self, renderer_type: str) -> None:
+        renderer_type = renderer_type.lower()
+        if renderer_type in {"pathtraced", "path_traced", "pt"}:
+            self.set_path_tracing(True, spp=64)
+        else:
+            self.set_path_tracing(False)
+
+    def open_scene(self, usd_path: str) -> None:
+        """Open an existing USD scene file."""
+
+        usd = str(Path(usd_path).expanduser())
+        self._omni_usd.get_context().open_stage(usd)
+        self.stage = self._omni_usd.get_context().get_stage()
+        self.world.reset()
+
+    def reference_asset(
+        self,
+        usd_path: str,
+        prim_path: str,
+        translate=(0, 0, 0),
+        rotate=(0, 0, 0),
+        scale=(1, 1, 1),
+    ) -> None:
+        """Add a USD reference at `prim_path` with a transform."""
+
+        from isaacsim.core.utils.stage import add_reference_to_stage
+        from pxr import Gf, UsdGeom
+
+        self._ensure_world()
+        add_reference_to_stage(str(Path(usd_path).expanduser()), prim_path)
+        prim = self.stage.GetPrimAtPath(prim_path)
+        xf = UsdGeom.Xformable(prim)
+        self._clear_xform_ops(xf)
+        xf.AddTranslateOp().Set(Gf.Vec3d(*translate))
+        rx, ry, rz = rotate
+        xf.AddRotateXYZOp().Set(Gf.Vec3f(rx, ry, rz))
+        xf.AddScaleOp().Set(Gf.Vec3f(*scale))
+
+    def set_dome_light(self, hdri_path: str | None, intensity: float = 1000.0, rotation_deg: float = 0.0) -> None:
+        """Create or update `/World/DomeLight`."""
+
+        from pxr import Gf, Sdf, UsdLux, UsdGeom
+
+        self._ensure_world()
+        path = "/World/DomeLight"
+        if hdri_path is None:
+            self.stage.RemovePrim(path)
+            return
+        light = UsdLux.DomeLight.Define(self.stage, path)
+        light.CreateIntensityAttr(float(intensity))
+        texture_attr = light.GetPrim().CreateAttribute("inputs:texture:file", Sdf.ValueTypeNames.Asset)
+        texture_attr.Set(str(Path(hdri_path).expanduser()))
+        xf = UsdGeom.Xformable(light.GetPrim())
+        self._clear_xform_ops(xf)
+        xf.AddRotateXYZOp().Set(Gf.Vec3f(0.0, 0.0, float(rotation_deg)))
+
+    def set_distant_light(
+        self,
+        prim_path: str = "/World/Sun",
+        intensity: float | None = 3000.0,
+        angle_deg: float = 0.5,
+        direction=(0, 0, -1),
+    ) -> None:
+        """Create/update a DistantLight; pass `intensity=None` to delete it."""
+
+        from pxr import Gf, UsdGeom, UsdLux
+
+        self._ensure_world()
+        if intensity is None:
+            self.stage.RemovePrim(prim_path)
+            return
+        light = UsdLux.DistantLight.Define(self.stage, prim_path)
+        light.CreateIntensityAttr(float(intensity))
+        light.CreateAngleAttr(float(angle_deg))
+        quat = self._lookat_quaternion((0.0, 0.0, 0.0), tuple(direction))
+        xf = UsdGeom.Xformable(light.GetPrim())
+        self._clear_xform_ops(xf)
+        xf.AddOrientOp(UsdGeom.XformOp.PrecisionFloat).Set(Gf.Quatf(*quat))
+
+    def set_path_tracing(self, enabled: bool, spp: int = 64) -> None:
+        """Toggle RTX path tracing and samples-per-pixel."""
+
+        settings = self._settings()
+        if enabled:
+            settings.set("/rtx/rendermode", "PathTracing")
+            settings.set("/rtx/pathtracing/spp", int(spp))
+            settings.set("/rtx/pathtracing/totalSpp", int(spp))
+        else:
+            settings.set("/rtx/rendermode", "RayTracedLighting")
+            settings.set("/rtx/pathtracing/spp", 1)
+            settings.set("/rtx/pathtracing/totalSpp", 1)
+
+    def set_shadows_enabled(self, enabled: bool) -> None:
+        """Best-effort shadow toggle for Isaac Sim / Kit builds."""
+
+        settings = self._settings()
+        for key in (
+            "/rtx/shadows/enabled",
+            "/rtx/directLighting/shadows/enabled",
+            "/rtx/raytracing/shadows/enabled",
+            "/persistent/rtx/shadows/enabled",
+        ):
+            try:
+                settings.set(key, bool(enabled))
+            except Exception:
+                pass
+
+    def add_camera(
+        self,
+        name: str,
+        position,
+        look_at,
+        resolution=(640, 480),
+        focal_length: float = 24.0,
+        horizontal_aperture: float = 20.955,
+    ) -> None:
+        """Create render product and rgb/depth/instance/normals annotators."""
+
+        from pxr import Gf, UsdGeom
+
+        self._ensure_world()
+        UsdGeom.Xform.Define(self.stage, "/World/Cameras")
+        width, height = int(resolution[0]), int(resolution[1])
+        vertical_aperture = horizontal_aperture * height / width
+        prim_path = name if name.startswith("/") else f"/World/Cameras/{name}"
+        camera = UsdGeom.Camera.Define(self.stage, prim_path)
+        camera.CreateFocalLengthAttr(float(focal_length))
+        camera.CreateHorizontalApertureAttr(float(horizontal_aperture))
+        camera.CreateVerticalApertureAttr(float(vertical_aperture))
+        camera.CreateClippingRangeAttr(Gf.Vec2f(0.01, 1000.0))
+        quat = self._lookat_quaternion(tuple(position), tuple(look_at))
+        xf = UsdGeom.Xformable(camera.GetPrim())
+        self._clear_xform_ops(xf)
+        xf.AddTranslateOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Vec3d(*position))
+        xf.AddOrientOp(UsdGeom.XformOp.PrecisionFloat).Set(Gf.Quatf(*quat))
+
+        render_product = self._rep.create.render_product(prim_path, (width, height))
+        annotators = {}
+        for modality, annotator_name in {
+            "rgb": "rgb",
+            "depth": "distance_to_camera",
+            "segmentation": "instance_segmentation",
+            "normal": "normals",
+        }.items():
+            annotator = self._rep.AnnotatorRegistry.get_annotator(annotator_name)
+            annotator.attach([render_product])
+            annotators[modality] = annotator
+
+        self.render_products[name] = render_product
+        self.annotators[name] = annotators
+        self.cameras[name] = CameraSpec(
+            prim_path=prim_path,
+            resolution=(width, height),
+            focal_length=float(focal_length),
+            horizontal_aperture=float(horizontal_aperture),
+            vertical_aperture=float(vertical_aperture),
+        )
+
+    def add_orbit_cameras(
+        self,
+        name_prefix,
+        center,
+        radius,
+        height,
+        num_cameras,
+        resolution=(512, 512),
+    ) -> list[str]:
+        names = []
+        cx, cy, cz = center
+        for idx in range(num_cameras):
+            theta = 2.0 * math.pi * idx / max(num_cameras, 1)
+            pos = (cx + radius * math.cos(theta), cy + radius * math.sin(theta), cz + height)
+            name = f"{name_prefix}_{idx:03d}"
+            self.add_camera(name, pos, center, resolution=resolution)
+            names.append(name)
+        return names
+
+    def add_sphere_cameras(
+        self,
+        name_prefix,
+        center,
+        radius,
+        num_cameras: int = 100,
+        resolution=(512, 512),
+    ) -> list[str]:
+        """Fibonacci sphere cameras for privileged static 3DGS capture."""
+
+        names = []
+        cx, cy, cz = center
+        golden = math.pi * (3.0 - math.sqrt(5.0))
+        for idx in range(num_cameras):
+            y = 1.0 - (idx / max(num_cameras - 1, 1)) * 2.0
+            r = math.sqrt(max(0.0, 1.0 - y * y))
+            theta = golden * idx
+            pos = (
+                cx + radius * math.cos(theta) * r,
+                cy + radius * math.sin(theta) * r,
+                cz + radius * y,
+            )
+            name = f"{name_prefix}_{idx:03d}"
+            self.add_camera(name, pos, center, resolution=resolution)
+            names.append(name)
+        return names
+
+    def capture_frame(
+        self,
+        camera_name: str,
+        rgb: bool = True,
+        depth: bool = False,
+        segmentation: bool = False,
+        normal: bool = False,
+    ) -> dict[str, Any]:
+        """Step Replicator once and return requested modalities plus camera matrices."""
+
+        self._rep.orchestrator.step()
+        ann = self.annotators[camera_name]
+        out: dict[str, Any] = {
+            "rgb": None,
+            "depth": None,
+            "segmentation": None,
+            "segmentation_mapping": None,
+            "normal": None,
+            "camera_intrinsics": self.camera_intrinsics(camera_name),
+            "camera_extrinsics": self.camera_extrinsics(camera_name),
+        }
+        if rgb:
+            out["rgb"] = self._rgb_array(ann["rgb"].get_data())
+        if depth:
+            out["depth"] = np.asarray(ann["depth"].get_data(), dtype=np.float32)
+        if segmentation:
+            data = ann["segmentation"].get_data()
+            out["segmentation"], out["segmentation_mapping"] = self._segmentation_arrays(data)
+        if normal:
+            out["normal"] = np.asarray(ann["normal"].get_data(), dtype=np.float32)[..., :3]
+        return out
+
+    def capture_multiview(self, camera_names, **kw) -> list[dict[str, Any]]:
+        return [self.capture_frame(name, **kw) for name in camera_names]
+
+    def camera_intrinsics(self, camera_name: str) -> np.ndarray:
+        spec = self.cameras[camera_name]
+        width, height = spec.resolution
+        fx = width * spec.focal_length / spec.horizontal_aperture
+        fy = height * spec.focal_length / spec.vertical_aperture
+        return np.array([[fx, 0.0, width * 0.5], [0.0, fy, height * 0.5], [0.0, 0.0, 1.0]], dtype=np.float32)
+
+    def camera_extrinsics(self, camera_name: str) -> np.ndarray:
+        from pxr import Usd, UsdGeom
+
+        spec = self.cameras[camera_name]
+        prim = self.stage.GetPrimAtPath(spec.prim_path)
+        mat = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        return np.array(mat, dtype=np.float64).reshape(4, 4)
+
+    def step(self, n: int = 1) -> None:
+        for _ in range(n):
+            self.world.step(render=True)
+
+    def shutdown(self) -> None:
+        self._app.close()
+
+    @staticmethod
+    def _clear_xform_ops(xf) -> None:
+        try:
+            xf.ClearXformOpOrder()
+        except Exception:
+            pass
+
+    def _ensure_world(self) -> None:
+        from pxr import UsdGeom
+
+        UsdGeom.Xform.Define(self.stage, "/World")
+
+    @staticmethod
+    def _rgb_array(data: Any) -> np.ndarray:
+        arr = np.asarray(data)
+        if arr.ndim == 3 and arr.shape[-1] == 4:
+            arr = arr[..., :3]
+        return arr.astype(np.uint8, copy=False)
+
+    @staticmethod
+    def _segmentation_arrays(data: Any) -> tuple[np.ndarray, dict[int, str]]:
+        if isinstance(data, dict):
+            mask = np.asarray(data.get("data"), dtype=np.int32)
+            info = data.get("info", {})
+        else:
+            mask = np.asarray(data, dtype=np.int32)
+            info = {}
+        raw_mapping = info.get("idToLabels") or info.get("idToSemantics") or info.get("idToPrimPaths") or {}
+        mapping: dict[int, str] = {}
+        for key, value in raw_mapping.items():
+            try:
+                int_key = int(key)
+            except Exception:
+                continue
+            if isinstance(value, dict):
+                mapping[int_key] = str(value.get("primPath") or value.get("class") or value)
+            else:
+                mapping[int_key] = str(value)
+        return mask, mapping
+
+    @staticmethod
+    def _lookat_quaternion(eye, target, world_up=(0.0, 0.0, 1.0)):
+        def normalize(v):
+            n = math.sqrt(sum(c * c for c in v))
+            return tuple(c / n for c in v) if n > 1e-9 else v
+
+        def cross(a, b):
+            return (
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            )
+
+        fwd = normalize(tuple(t - e for t, e in zip(target, eye)))
+        right = normalize(cross(fwd, world_up))
+        if sum(c * c for c in right) < 1e-9:
+            right = (1.0, 0.0, 0.0)
+        up = cross(right, fwd)
+        lz = tuple(-f for f in fwd)
+        m00, m01, m02 = right[0], up[0], lz[0]
+        m10, m11, m12 = right[1], up[1], lz[1]
+        m20, m21, m22 = right[2], up[2], lz[2]
+        trace = m00 + m11 + m22
+        if trace > 0:
+            s = 0.5 / math.sqrt(trace + 1.0)
+            w = 0.25 / s
+            x = (m21 - m12) * s
+            y = (m02 - m20) * s
+            z = (m10 - m01) * s
+        elif m00 > m11 and m00 > m22:
+            s = 2.0 * math.sqrt(max(0.0, 1.0 + m00 - m11 - m22))
+            w = (m21 - m12) / s
+            x = 0.25 * s
+            y = (m01 + m10) / s
+            z = (m02 + m20) / s
+        elif m11 > m22:
+            s = 2.0 * math.sqrt(max(0.0, 1.0 + m11 - m00 - m22))
+            w = (m02 - m20) / s
+            x = (m01 + m10) / s
+            y = 0.25 * s
+            z = (m12 + m21) / s
+        else:
+            s = 2.0 * math.sqrt(max(0.0, 1.0 + m22 - m00 - m11))
+            w = (m10 - m01) / s
+            x = (m02 + m20) / s
+            y = (m12 + m21) / s
+            z = 0.25 * s
+        n = math.sqrt(w * w + x * x + y * y + z * z)
+        return (w / n, x / n, y / n, z / n)
