@@ -27,6 +27,16 @@ def _prefer(paths: list[Path], needles: list[str], count: int = 1) -> list[Path]
     return [item[2] for item in ranked[:count]]
 
 
+def _search_assets(index: AssetIndex, needles: list[str], count: int = 1, category: str | None = None) -> list[Path]:
+    if category == "robot":
+        paths = index.robots()
+    elif category == "object":
+        paths = index.objects()
+    else:
+        paths = [Path(record.path) for record in index.records if Path(record.path).suffix.lower() in {".usd", ".usda", ".usdc"}]
+    return _prefer(paths, needles, count=count)
+
+
 def _background_scenes(index: AssetIndex) -> list[Path]:
     bad_tokens = ("/light/", "/lights/", "/hdr/", "/texture/", "/textures/", "/material/", "/materials/")
     candidates = []
@@ -43,6 +53,10 @@ def add_procedural_table(renderer) -> None:
     from pxr import Gf, Sdf, UsdGeom, UsdShade
 
     stage = renderer.stage
+    UsdGeom.Xform.Define(stage, "/World")
+    floor = UsdGeom.Cube.Define(stage, "/World/Floor")
+    floor.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, -0.03))
+    floor.AddScaleOp().Set(Gf.Vec3f(2.5, 2.5, 0.02))
     table = UsdGeom.Cube.Define(stage, "/World/Table")
     table.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.35))
     table.AddScaleOp().Set(Gf.Vec3f(0.9, 0.6, 0.05))
@@ -53,12 +67,21 @@ def add_procedural_table(renderer) -> None:
     shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.65)
     mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
     UsdShade.MaterialBindingAPI(table).Bind(mat)
+    UsdShade.MaterialBindingAPI(floor).Bind(mat)
 
 
-def build_demo_scene(renderer, index: AssetIndex) -> dict[str, list[str]]:
-    backgrounds = _background_scenes(index)
-    robots = _prefer(index.robots(), ["G2", "genie", "franka"], count=1)
-    objects = _prefer(index.objects(), ["cup", "box", "bottle", "can", "fruit", "block"], count=3)
+def build_demo_scene(
+    renderer,
+    index: AssetIndex,
+    robot_query: str = "franka",
+    use_background: bool = False,
+) -> dict[str, list[str]]:
+    backgrounds = _background_scenes(index) if use_background else []
+    robot_needles = [robot_query, "franka", "panda"] if robot_query else ["franka", "panda", "G2", "genie"]
+    robots = _search_assets(index, robot_needles, count=1, category="robot")
+    if not robots:
+        robots = _search_assets(index, robot_needles, count=1)
+    objects = _search_assets(index, ["cup", "box", "bottle", "can", "fruit", "block"], count=3, category="object")
     hdris = index.hdris()
 
     referenced = {"backgrounds": [], "robots": [], "objects": [], "hdri": []}
@@ -89,7 +112,8 @@ def run(args: argparse.Namespace) -> None:
 
     renderer = launch_renderer(headless=args.headless, renderer_type=args.renderer_type)
     try:
-        build_demo_scene(renderer, index)
+        referenced = build_demo_scene(renderer, index, robot_query=args.robot_query, use_background=args.use_background)
+        print(f"Phase 0 referenced assets: {referenced}")
         cameras = renderer.add_orbit_cameras(
             "phase0_cam",
             center=(0.0, 0.0, 0.55),
@@ -134,6 +158,8 @@ def main() -> None:
     parser.add_argument("--output_dir", default="data/demo_phase0")
     parser.add_argument("--headless", action="store_true", default=True)
     parser.add_argument("--renderer_type", default="raytraced")
+    parser.add_argument("--robot_query", default="franka")
+    parser.add_argument("--use_background", action="store_true", help="Open a full background scene USD if one can be identified.")
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     run(parser.parse_args())

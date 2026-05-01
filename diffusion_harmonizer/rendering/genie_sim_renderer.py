@@ -72,7 +72,7 @@ class GenieSimRenderer:
 
         from isaacsim.core.api import World
 
-        usd = str(Path(usd_path).expanduser())
+        usd = str(Path(usd_path).expanduser().resolve())
         self._omni_usd.get_context().open_stage(usd)
         self.stage = self._omni_usd.get_context().get_stage()
         self.world = World(stage_units_in_meters=1.0)
@@ -92,7 +92,7 @@ class GenieSimRenderer:
         from pxr import Gf, UsdGeom
 
         self._ensure_world()
-        add_reference_to_stage(str(Path(usd_path).expanduser()), prim_path)
+        add_reference_to_stage(str(Path(usd_path).expanduser().resolve()), prim_path)
         prim = self.stage.GetPrimAtPath(prim_path)
         xf = UsdGeom.Xformable(prim)
         self._clear_xform_ops(xf)
@@ -114,7 +114,7 @@ class GenieSimRenderer:
         light = UsdLux.DomeLight.Define(self.stage, path)
         light.CreateIntensityAttr(float(intensity))
         texture_attr = light.GetPrim().CreateAttribute("inputs:texture:file", Sdf.ValueTypeNames.Asset)
-        texture_attr.Set(str(Path(hdri_path).expanduser()))
+        texture_attr.Set(str(Path(hdri_path).expanduser().resolve()))
         xf = UsdGeom.Xformable(light.GetPrim())
         self._clear_xform_ops(xf)
         xf.AddRotateXYZOp().Set(Gf.Vec3f(0.0, 0.0, float(rotation_deg)))
