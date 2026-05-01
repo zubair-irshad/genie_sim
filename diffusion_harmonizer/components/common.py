@@ -34,14 +34,21 @@ def feather_mask(mask: np.ndarray, sigma: float = 3.0) -> np.ndarray:
 def discover_demo_cameras(renderer, count: int = 5) -> list[str]:
     if renderer.cameras:
         return list(renderer.cameras.keys())[:count]
-    return renderer.add_orbit_cameras(
-        "demo_cam",
-        center=(0.0, 0.0, 0.8),
-        radius=2.0,
-        height=0.6,
-        num_cameras=count,
-        resolution=(640, 480),
-    )
+    presets = [
+        ((1.7, -1.2, 1.35), (-0.20, 0.0, 0.82)),
+        ((1.6, 1.2, 1.25), (-0.20, 0.0, 0.82)),
+        ((-1.7, -1.1, 1.35), (-0.35, 0.0, 0.95)),
+        ((-1.8, 1.0, 1.25), (-0.35, 0.0, 0.95)),
+        ((0.0, -2.0, 1.55), (-0.15, 0.0, 0.88)),
+        ((-2.2, 0.0, 1.65), (-0.55, 0.0, 1.0)),
+    ]
+    names = []
+    for idx in range(count):
+        position, look_at = presets[idx % len(presets)]
+        name = f"demo_cam_{idx:03d}"
+        renderer.add_camera(name, position=position, look_at=look_at, resolution=(640, 480), focal_length=20.0)
+        names.append(name)
+    return names
 
 
 def pair_id(index: int) -> str:

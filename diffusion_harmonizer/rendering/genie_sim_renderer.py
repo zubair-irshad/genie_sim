@@ -235,6 +235,8 @@ class GenieSimRenderer:
     def set_shadows_enabled(self, enabled: bool) -> None:
         """Best-effort shadow toggle for Isaac Sim / Kit builds."""
 
+        from pxr import Sdf, UsdLux
+
         settings = self._settings()
         for key in (
             "/rtx/shadows/enabled",
@@ -246,6 +248,19 @@ class GenieSimRenderer:
                 settings.set(key, bool(enabled))
             except Exception:
                 pass
+        light_types = (UsdLux.DomeLight, UsdLux.DistantLight, UsdLux.SphereLight, UsdLux.RectLight, UsdLux.DiskLight)
+        for prim in self.stage.Traverse():
+            if not prim.HasAPI(UsdLux.LightAPI) and not any(prim.IsA(light_type) for light_type in light_types):
+                continue
+            for attr_name in (
+                "inputs:shadow:enable",
+                "inputs:shadow:enabled",
+                "inputs:enableShadows",
+            ):
+                attr = prim.GetAttribute(attr_name)
+                if not attr.IsValid():
+                    attr = prim.CreateAttribute(attr_name, Sdf.ValueTypeNames.Bool)
+                attr.Set(bool(enabled))
 
     def add_camera(
         self,

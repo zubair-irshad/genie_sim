@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from diffusion_harmonizer.components.common import discover_demo_cameras, feather_mask, foreground_mask, pair_id
-from diffusion_harmonizer.data.image_io import write_pair
+from diffusion_harmonizer.data.image_io import save_png, write_pair
 
 
 @dataclass
@@ -43,6 +43,18 @@ def sample_isp_params(rng: random.Random, scale: float = 1.0) -> ISPParams:
         hue_shift=rng.uniform(-15.0, 15.0) * scale,
         noise_sigma=rng.uniform(0.0, 10.0) * scale,
     )
+
+
+def _fallback_foreground_mask(segmentation: np.ndarray, current_mask: np.ndarray) -> tuple[np.ndarray, str]:
+    coverage = float(np.mean(current_mask > 0.05))
+    if coverage >= 0.01:
+        return current_mask, "replicator_mapping"
+    seg = np.asarray(segmentation)
+    fallback = (seg != 0).astype(np.float32)
+    coverage = float(np.mean(fallback > 0.0))
+    if coverage >= 0.01:
+        return fallback, "all_nonzero_instance_ids"
+    return np.ones(seg.shape[:2], dtype=np.float32), "full_frame_fallback_empty_mask"
 
 
 def _kelvin_rgb(kelvin: int) -> np.ndarray:
@@ -99,13 +111,15 @@ def generate_pairs(
         scene_state = pre_pair_callback(idx, camera) if pre_pair_callback else {}
         frame = renderer.capture_frame(camera, rgb=True, segmentation=True)
         target = frame["rgb"]
-        params = sample_isp_params(rng, scale=0.3 if idx >= int(count * 0.67) else 1.0)
+        params = sample_isp_params(rng, scale=0.3 if idx >= int(count * 0.67) else 1.35)
         isp = apply_software_isp(target, params, rng)
         if idx >= int(count * 0.67):
             mask = np.ones(target.shape[:2], dtype=np.float32)
             mode = "full_frame_mild"
+            mask_source = "full_frame"
         else:
             mask = foreground_mask(frame["segmentation"], frame["segmentation_mapping"] or {}, foreground_paths)
+            mask, mask_source = _fallback_foreground_mask(frame["segmentation"], mask)
             mask = feather_mask(mask, sigma=3.0)
             mode = "masked_foreground"
         mixed = (mask[..., None] * isp.astype(np.float32) + (1.0 - mask[..., None]) * target.astype(np.float32)).astype(np.uint8)
@@ -119,10 +133,13 @@ def generate_pairs(
                 "mode": mode,
                 "camera": camera,
                 "params": asdict(params),
+                "mask_source": mask_source,
+                "mask_coverage": float(np.mean(mask > 0.05)),
                 "scene_state": scene_state,
             },
             mask=mask,
         )
+        save_png(output / pair_id(idx) / "isp_full.png", isp)
     return entries
 
 
