@@ -65,6 +65,9 @@ def main() -> None:
     parser.add_argument("--use_background", action="store_true", help="Open a full indoor background USD if one can be identified.")
     args = parser.parse_args()
 
+    if args.robot_usd and not Path(args.robot_usd).exists():
+        raise FileNotFoundError(f"--robot_usd does not exist: {args.robot_usd}")
+
     log(f"Indexing assets under {args.assets_root}")
     index = AssetIndex(args.assets_root)
     if not index.records:
@@ -84,10 +87,9 @@ def main() -> None:
             robot_query=args.robot_query,
             robot_usd=args.robot_usd,
             use_background=args.use_background,
+            log_fn=log,
         )
         log(f"Referenced assets: {referenced}")
-        if args.robot_usd and not Path(args.robot_usd).exists():
-            raise FileNotFoundError(f"--robot_usd does not exist: {args.robot_usd}")
         randomize_scene = Phase1SceneRandomizer(
             renderer,
             robot_prim_path="/World/Robot",

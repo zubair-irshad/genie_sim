@@ -76,7 +76,12 @@ def build_demo_scene(
     robot_query: str = "franka",
     robot_usd: str | None = None,
     use_background: bool = False,
+    log_fn=None,
 ) -> dict[str, list[str]]:
+    def scene_log(message: str) -> None:
+        if log_fn:
+            log_fn(message)
+
     backgrounds = _background_scenes(index) if use_background else []
     robot_needles = [robot_query, "franka", "panda"] if robot_query else ["franka", "panda", "G2", "genie"]
     robots = [Path(robot_usd)] if robot_usd else _search_assets(index, robot_needles, count=1, category="robot")
@@ -87,22 +92,28 @@ def build_demo_scene(
 
     referenced = {"backgrounds": [], "robots": [], "objects": [], "object_prim_paths": [], "hdri": []}
     if backgrounds:
+        scene_log(f"Opening background scene: {backgrounds[0]}")
         renderer.open_scene(str(backgrounds[0]))
         referenced["backgrounds"].append(str(backgrounds[0]))
+    scene_log("Adding procedural floor/table")
     add_procedural_table(renderer)
 
     if robots:
+        scene_log(f"Referencing robot USD: {robots[0]}")
         renderer.reference_asset(str(robots[0]), "/World/Robot", translate=(-0.6, 0.0, 0.0), scale=(1.0, 1.0, 1.0))
         referenced["robots"].append(str(robots[0]))
     for idx, obj in enumerate(objects):
         x = -0.25 + 0.25 * idx
         prim_path = f"/World/Object_{idx}"
+        scene_log(f"Referencing foreground object USD: {obj} -> {prim_path}")
         renderer.reference_asset(str(obj), prim_path, translate=(x, 0.0, 0.47), scale=(1.0, 1.0, 1.0))
         referenced["objects"].append(str(obj))
         referenced["object_prim_paths"].append(prim_path)
     if hdris:
+        scene_log(f"Setting dome HDRI: {hdris[0]}")
         renderer.set_dome_light(str(hdris[0]), intensity=1200.0, rotation_deg=0.0)
         referenced["hdri"].append(str(hdris[0]))
+    scene_log("Setting distant light")
     renderer.set_distant_light(intensity=2500.0, angle_deg=1.5, direction=(-0.4, -0.3, -1.0))
     return referenced
 
