@@ -135,6 +135,7 @@ def main() -> None:
                 count=args.shadow_count,
                 seed=args.seed,
                 pre_pair_callback=randomize_scene,
+                hdri_query=args.hdri_query,
             )
             master["train"].update(shadow_entries)
             log(f"Finished shadow pairs: {len(shadow_entries)}")

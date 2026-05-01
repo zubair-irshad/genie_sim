@@ -21,6 +21,23 @@ def _random_unit_vector_above_horizon(rng: random.Random) -> tuple[float, float,
     )
 
 
+def _filtered_hdris(index: AssetIndex, query: str | None = None) -> list[Path]:
+    hdris = index.hdris()
+    if not query:
+        return hdris
+    include = [token.strip().lower() for token in query.split(",") if token.strip()]
+    bad = ("outdoor", "forest", "field", "park", "street", "road", "airport", "beach", "mountain", "sky")
+    ranked = []
+    for path in hdris:
+        low = str(path).lower()
+        if any(token in low for token in bad) and not any(token in low for token in include):
+            continue
+        score = sum(token in low for token in include)
+        ranked.append((score, str(path), path))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [item[2] for item in ranked] or hdris
+
+
 def generate_pairs(
     renderer,
     assets_root: str | Path = "assets/geniesim",
@@ -28,10 +45,11 @@ def generate_pairs(
     count: int = 30,
     seed: int = 42,
     pre_pair_callback=None,
+    hdri_query: str | None = "indoor,studio,kitchen,office,warehouse,room",
 ) -> dict[str, dict[str, str]]:
     rng = random.Random(seed)
     index = AssetIndex(assets_root)
-    hdris = index.hdris()
+    hdris = _filtered_hdris(index, hdri_query)
     if not hdris:
         raise FileNotFoundError(f"No HDRI files found under {assets_root}; finish the GenieSimAssets download first.")
 
@@ -42,11 +60,11 @@ def generate_pairs(
         camera = cameras[idx % len(cameras)]
         scene_state = pre_pair_callback(idx, camera) if pre_pair_callback else {}
         hdri = str(rng.choice(hdris))
-        dome_intensity = rng.uniform(500.0, 2000.0)
+        dome_intensity = rng.uniform(800.0, 1600.0)
         dome_rotation = rng.uniform(0.0, 360.0)
         sun = {
-            "intensity": rng.uniform(2000.0, 5000.0),
-            "angle_deg": rng.uniform(0.5, 5.0),
+            "intensity": rng.uniform(500.0, 1500.0),
+            "angle_deg": rng.uniform(2.0, 8.0),
             "direction": _random_unit_vector_above_horizon(rng),
         }
 
@@ -99,12 +117,13 @@ def main() -> None:
     parser.add_argument("--output_dir", default="data/shadow_simulation/demo")
     parser.add_argument("--count", type=int, default=30)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--hdri_query", default="indoor,studio,kitchen,office,warehouse,room")
     args = parser.parse_args()
     from diffusion_harmonizer.rendering import launch_renderer
 
     renderer = launch_renderer(headless=True)
     try:
-        generate_pairs(renderer, args.assets_root, args.output_dir, args.count, args.seed)
+        generate_pairs(renderer, args.assets_root, args.output_dir, args.count, args.seed, hdri_query=args.hdri_query)
     finally:
         renderer.shutdown()
 
