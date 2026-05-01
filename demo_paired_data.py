@@ -120,9 +120,11 @@ def main() -> None:
                 renderer,
                 output / "isp_modification" / "demo",
                 count=args.isp_count,
-                foreground_paths=["Robot", "Object_", "franka", "panda", "object"],
+                foreground_paths=["/World/Robot", "/World/Object_"],
                 seed=args.seed,
                 pre_pair_callback=randomize_scene,
+                full_frame_fraction=0.0,
+                strength=0.8,
             )
             master["train"].update(isp_entries)
             log(f"Finished ISP pairs: {len(isp_entries)}")
@@ -136,6 +138,7 @@ def main() -> None:
                 seed=args.seed,
                 pre_pair_callback=randomize_scene,
                 hdri_query=args.hdri_query,
+                foreground_paths=["/World/Robot", "/World/Object_"],
             )
             master["train"].update(shadow_entries)
             log(f"Finished shadow pairs: {len(shadow_entries)}")

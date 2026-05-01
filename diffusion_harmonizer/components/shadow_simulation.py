@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from diffusion_harmonizer.asset_manager import AssetIndex
-from diffusion_harmonizer.components.common import discover_demo_cameras, pair_id
+from diffusion_harmonizer.components.common import discover_demo_cameras, feather_mask, foreground_mask, pair_id
 from diffusion_harmonizer.data.image_io import save_png, write_pair
 
 
@@ -38,6 +38,28 @@ def _filtered_hdris(index: AssetIndex, query: str | None = None) -> list[Path]:
     return [item[2] for item in ranked] or hdris
 
 
+def _attenuate_cast_shadows(image: np.ndarray, foreground: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Fallback when RTX shadow toggles do not remove shadows reliably.
+
+    This estimates dark cast-shadow regions on low-saturation tabletop/background
+    receivers and lifts only those pixels. Foreground assets are excluded.
+    """
+
+    import cv2
+
+    rgb = image.astype(np.float32) / 255.0
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    value = hsv[..., 2]
+    saturation = hsv[..., 1]
+    local_light = cv2.GaussianBlur(value, (0, 0), sigmaX=21.0, sigmaY=21.0)
+    shadow_score = np.clip((local_light - value - 0.045) / 0.22, 0.0, 1.0)
+    receiver = ((saturation < 0.42) & (local_light > 0.28)).astype(np.float32)
+    shadow_mask = shadow_score * receiver * (1.0 - np.clip(foreground, 0.0, 1.0))
+    shadow_mask = feather_mask(shadow_mask, sigma=4.0)
+    lifted = rgb + shadow_mask[..., None] * (local_light[..., None] - rgb) * 0.9
+    return (np.clip(lifted, 0.0, 1.0) * 255.0).astype(np.uint8), np.clip(shadow_mask, 0.0, 1.0)
+
+
 def generate_pairs(
     renderer,
     assets_root: str | Path = "assets/geniesim",
@@ -46,6 +68,7 @@ def generate_pairs(
     seed: int = 42,
     pre_pair_callback=None,
     hdri_query: str | None = "indoor,studio,kitchen,office,warehouse,room",
+    foreground_paths: list[str] | None = None,
 ) -> dict[str, dict[str, str]]:
     rng = random.Random(seed)
     index = AssetIndex(assets_root)
@@ -56,6 +79,7 @@ def generate_pairs(
     output = Path(output_dir)
     cameras = discover_demo_cameras(renderer, count=min(5, count))
     entries: dict[str, dict[str, str]] = {}
+    foreground_paths = foreground_paths or ["/World/Robot", "/World/Object_"]
     for idx in range(count):
         camera = cameras[idx % len(cameras)]
         scene_state = pre_pair_callback(idx, camera) if pre_pair_callback else {}
@@ -72,7 +96,14 @@ def generate_pairs(
         renderer.set_distant_light(intensity=sun["intensity"], angle_deg=sun["angle_deg"], direction=sun["direction"])
         renderer.set_shadows_enabled(True)
         renderer.set_path_tracing(True, spp=64)
-        target = renderer.capture_frame(camera, rgb=True)["rgb"]
+        target_frame = renderer.capture_frame(camera, rgb=True, segmentation=True)
+        target = target_frame["rgb"]
+        fg_mask = foreground_mask(
+            target_frame["segmentation"],
+            target_frame["segmentation_mapping"] or {},
+            foreground_paths,
+        )
+        fg_mask = feather_mask(fg_mask, sigma=2.0)
 
         # Keep lighting fixed. Component 4 should isolate missing/weak shadow
         # artifacts; foreground/background relighting belongs to Component 3.
@@ -84,8 +115,18 @@ def generate_pairs(
         renderer.set_shadows_enabled(True)
 
         diff = np.abs(target.astype(np.int16) - degraded.astype(np.int16)).astype(np.uint8)
+        attenuated, shadow_mask = _attenuate_cast_shadows(target, fg_mask)
+        shadow_region = shadow_mask > 0.05
+        non_shadow_region = shadow_mask <= 0.02
+        render_shadow_delta = float(np.mean(diff[shadow_region])) if np.any(shadow_region) else 0.0
+        render_non_shadow_delta = float(np.mean(diff[non_shadow_region])) if np.any(non_shadow_region) else float(np.mean(diff))
+        fallback_used = render_shadow_delta < 8.0 or render_non_shadow_delta > 6.0
+        if fallback_used:
+            degraded = attenuated
+            diff = np.abs(target.astype(np.int16) - degraded.astype(np.int16)).astype(np.uint8)
         pair_dir = output / pair_id(idx)
         save_png(pair_dir / "shadow_diff.png", diff)
+        save_png(pair_dir / "shadow_mask.png", np.repeat((shadow_mask * 255).astype(np.uint8)[..., None], 3, axis=-1))
         key = f"shadow_{pair_id(idx)}"
         entries[key] = write_pair(
             pair_dir,
@@ -98,7 +139,10 @@ def generate_pairs(
                 "dome_intensity": dome_intensity,
                 "dome_rotation_deg": dome_rotation,
                 "distant_light": sun,
-                "degradation": "same lights with RTX shadows disabled",
+                "degradation": "same lights with cast shadows disabled or attenuated",
+                "shadow_attenuation_fallback": fallback_used,
+                "render_shadow_delta": render_shadow_delta,
+                "render_non_shadow_delta": render_non_shadow_delta,
                 "scene_state": scene_state,
                 "shadow_toggle_settings": [
                     "/rtx/shadows/enabled",

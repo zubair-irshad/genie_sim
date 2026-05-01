@@ -86,7 +86,7 @@ def generate_pairs(
     output = Path(output_dir)
     model = RelightingModel(command=relighting_command)
     cameras = discover_demo_cameras(renderer, count=min(5, count))
-    foreground_paths = foreground_paths or ["robot", "object", "Obj", "G2", "Franka"]
+    foreground_paths = foreground_paths or ["/World/Robot", "/World/Object_"]
     entries: dict[str, dict[str, str]] = {}
 
     for idx in range(count):

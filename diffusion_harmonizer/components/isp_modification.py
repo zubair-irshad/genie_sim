@@ -45,16 +45,11 @@ def sample_isp_params(rng: random.Random, scale: float = 1.0) -> ISPParams:
     )
 
 
-def _fallback_foreground_mask(segmentation: np.ndarray, current_mask: np.ndarray) -> tuple[np.ndarray, str]:
+def _strict_foreground_mask(segmentation: np.ndarray, current_mask: np.ndarray) -> tuple[np.ndarray, str]:
     coverage = float(np.mean(current_mask > 0.05))
-    if coverage >= 0.01:
+    if coverage >= 0.002:
         return current_mask, "replicator_mapping"
-    seg = np.asarray(segmentation)
-    fallback = (seg != 0).astype(np.float32)
-    coverage = float(np.mean(fallback > 0.0))
-    if coverage >= 0.01:
-        return fallback, "all_nonzero_instance_ids"
-    return np.ones(seg.shape[:2], dtype=np.float32), "full_frame_fallback_empty_mask"
+    return np.zeros(segmentation.shape[:2], dtype=np.float32), "empty_foreground_mask"
 
 
 def _kelvin_rgb(kelvin: int) -> np.ndarray:
@@ -99,27 +94,32 @@ def generate_pairs(
     foreground_paths: list[str] | None = None,
     seed: int = 42,
     pre_pair_callback=None,
+    full_frame_fraction: float = 0.0,
+    strength: float = 0.8,
 ) -> dict[str, dict[str, str]]:
     rng = random.Random(seed)
     output = Path(output_dir)
     cameras = discover_demo_cameras(renderer, count=min(5, count))
     entries: dict[str, dict[str, str]] = {}
-    foreground_paths = foreground_paths or ["robot", "object", "Obj", "G2", "Franka"]
+    foreground_paths = foreground_paths or ["/World/Robot", "/World/Object_"]
 
     for idx in range(count):
         camera = cameras[idx % len(cameras)]
         scene_state = pre_pair_callback(idx, camera) if pre_pair_callback else {}
         frame = renderer.capture_frame(camera, rgb=True, segmentation=True)
         target = frame["rgb"]
-        params = sample_isp_params(rng, scale=0.3 if idx >= int(count * 0.67) else 1.35)
+        use_full_frame = full_frame_fraction > 0.0 and rng.random() < full_frame_fraction
+        params = sample_isp_params(rng, scale=0.3 if use_full_frame else strength)
         isp = apply_software_isp(target, params, rng)
-        if idx >= int(count * 0.67):
+        if use_full_frame:
             mask = np.ones(target.shape[:2], dtype=np.float32)
             mode = "full_frame_mild"
             mask_source = "full_frame"
         else:
             mask = foreground_mask(frame["segmentation"], frame["segmentation_mapping"] or {}, foreground_paths)
-            mask, mask_source = _fallback_foreground_mask(frame["segmentation"], mask)
+            mask, mask_source = _strict_foreground_mask(frame["segmentation"], mask)
+            if mask_source == "empty_foreground_mask":
+                continue
             mask = feather_mask(mask, sigma=3.0)
             mode = "masked_foreground"
         mixed = (mask[..., None] * isp.astype(np.float32) + (1.0 - mask[..., None]) * target.astype(np.float32)).astype(np.uint8)
