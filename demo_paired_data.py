@@ -11,6 +11,10 @@ from diffusion_harmonizer.components.scene_randomization import Phase1SceneRando
 from diffusion_harmonizer.rendering import launch_renderer
 
 
+def log(message: str) -> None:
+    print(f"[demo_paired_data] {message}", flush=True)
+
+
 def write_report(output: Path, master: dict[str, dict[str, dict[str, str]]]) -> None:
     rows = []
     for key, item in master["train"].items():
@@ -61,15 +65,19 @@ def main() -> None:
     parser.add_argument("--use_background", action="store_true", help="Open a full indoor background USD if one can be identified.")
     args = parser.parse_args()
 
+    log(f"Indexing assets under {args.assets_root}")
     index = AssetIndex(args.assets_root)
     if not index.records:
         raise FileNotFoundError(f"No assets indexed under {args.assets_root}. Finish the GenieSimAssets download first.")
     index.write_manifest(Path(args.assets_root) / "manifest.json")
+    log(f"Indexed {len(index.records)} assets")
 
+    log("Launching Isaac Sim renderer")
     renderer = launch_renderer(headless=True)
     master: dict[str, dict[str, dict[str, str]]] = {"train": {}}
     output = Path(args.output_dir)
     try:
+        log("Building tabletop scene")
         referenced = build_demo_scene(
             renderer,
             index,
@@ -77,15 +85,18 @@ def main() -> None:
             robot_usd=args.robot_usd,
             use_background=args.use_background,
         )
-        print(f"Phase 1 referenced assets: {referenced}")
+        log(f"Referenced assets: {referenced}")
+        if args.robot_usd and not Path(args.robot_usd).exists():
+            raise FileNotFoundError(f"--robot_usd does not exist: {args.robot_usd}")
         randomize_scene = Phase1SceneRandomizer(
             renderer,
             robot_prim_path="/World/Robot",
             object_prim_paths=referenced.get("object_prim_paths", []),
             seed=args.seed,
         )
-        master["train"].update(
-            isp_modification.generate_pairs(
+        if args.isp_count > 0:
+            log(f"Generating {args.isp_count} ISP pairs")
+            isp_entries = isp_modification.generate_pairs(
                 renderer,
                 output / "isp_modification" / "demo",
                 count=args.isp_count,
@@ -93,9 +104,11 @@ def main() -> None:
                 seed=args.seed,
                 pre_pair_callback=randomize_scene,
             )
-        )
-        master["train"].update(
-            shadow_simulation.generate_pairs(
+            master["train"].update(isp_entries)
+            log(f"Finished ISP pairs: {len(isp_entries)}")
+        if args.shadow_count > 0:
+            log(f"Generating {args.shadow_count} shadow pairs")
+            shadow_entries = shadow_simulation.generate_pairs(
                 renderer,
                 assets_root=args.assets_root,
                 output_dir=output / "shadow_simulation" / "demo",
@@ -103,7 +116,8 @@ def main() -> None:
                 seed=args.seed,
                 pre_pair_callback=randomize_scene,
             )
-        )
+            master["train"].update(shadow_entries)
+            log(f"Finished shadow pairs: {len(shadow_entries)}")
         if args.include_external:
             from diffusion_harmonizer.components import artifacts_correction, asset_reinsertion, relighting
 
@@ -135,9 +149,14 @@ def main() -> None:
                     seed=args.seed,
                 )
             )
+        if not master["train"]:
+            raise RuntimeError("No pairs were generated. Check --isp_count, --shadow_count, and asset paths.")
+        output.mkdir(parents=True, exist_ok=True)
         (output / "demo_pairs.json").write_text(json.dumps(master, indent=2))
         write_report(output, master)
+        log(f"Wrote {output / 'demo_pairs.json'} and {output / 'report.html'}")
     finally:
+        log("Shutting down renderer")
         renderer.shutdown()
 
 
