@@ -55,6 +55,15 @@ def main() -> None:
     parser.add_argument("--output_dir", default="data/demo")
     parser.add_argument("--robot_query", default="franka")
     parser.add_argument("--robot_usd", default=None, help="Explicit Franka/Panda USD path. Use this when assets_root is GenieSimAssets but Franka lives elsewhere.")
+    parser.add_argument("--hdri_query", default="indoor,studio,kitchen,office,warehouse,room")
+    parser.add_argument("--table_height", type=float, default=0.72)
+    parser.add_argument("--object_z", type=float, default=None)
+    parser.add_argument("--object_scale", type=float, default=0.45)
+    parser.add_argument("--robot_x", type=float, default=-0.95)
+    parser.add_argument("--robot_y", type=float, default=0.0)
+    parser.add_argument("--robot_z", type=float, default=0.72)
+    parser.add_argument("--robot_yaw", type=float, default=0.0)
+    parser.add_argument("--robot_scale", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--isp_count", type=int, default=30)
     parser.add_argument("--shadow_count", type=int, default=30)
@@ -87,6 +96,13 @@ def main() -> None:
             robot_query=args.robot_query,
             robot_usd=args.robot_usd,
             use_background=args.use_background,
+            hdri_query=args.hdri_query,
+            table_height=args.table_height,
+            object_z=args.object_z,
+            object_scale=args.object_scale,
+            robot_translate=(args.robot_x, args.robot_y, args.robot_z),
+            robot_rotate=(0.0, 0.0, args.robot_yaw),
+            robot_scale=args.robot_scale,
             log_fn=log,
         )
         log(f"Referenced assets: {referenced}")
@@ -94,6 +110,8 @@ def main() -> None:
             renderer,
             robot_prim_path="/World/Robot",
             object_prim_paths=referenced.get("object_prim_paths", []),
+            object_z=float(referenced["object_z"][0]),
+            object_scale=args.object_scale,
             seed=args.seed,
         )
         if args.isp_count > 0:

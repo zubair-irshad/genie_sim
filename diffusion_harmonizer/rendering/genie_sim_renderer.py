@@ -88,12 +88,17 @@ class GenieSimRenderer:
     ) -> None:
         """Add a USD reference at `prim_path` with a transform."""
 
-        from isaacsim.core.utils.stage import add_reference_to_stage
         from pxr import Gf, UsdGeom
 
         self._ensure_world()
-        add_reference_to_stage(str(Path(usd_path).expanduser().resolve()), prim_path)
-        prim = self.stage.GetPrimAtPath(prim_path)
+        asset_path = Path(usd_path).expanduser().resolve()
+        if not asset_path.exists():
+            raise FileNotFoundError(f"USD asset does not exist: {asset_path}")
+
+        prim = UsdGeom.Xform.Define(self.stage, prim_path).GetPrim()
+        prim.GetReferences().ClearReferences()
+        if not prim.GetReferences().AddReference(str(asset_path)):
+            raise RuntimeError(f"Failed to add USD reference {asset_path} at {prim_path}")
         xf = UsdGeom.Xformable(prim)
         self._clear_xform_ops(xf)
         xf.AddTranslateOp().Set(Gf.Vec3d(*translate))

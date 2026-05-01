@@ -37,11 +37,15 @@ class Phase1SceneRandomizer:
         renderer,
         robot_prim_path: str = "/World/Robot",
         object_prim_paths: list[str] | None = None,
+        object_z: float = 0.8,
+        object_scale: float = 0.45,
         seed: int = 42,
     ):
         self.renderer = renderer
         self.robot_prim_path = robot_prim_path
         self.object_prim_paths = object_prim_paths or []
+        self.object_z = object_z
+        self.object_scale = object_scale
         self.rng = random.Random(seed)
 
     def __call__(self, pair_index: int, camera_name: str) -> dict[str, object]:
@@ -65,9 +69,21 @@ class Phase1SceneRandomizer:
             x = -0.25 + 0.25 * idx + self.rng.uniform(-0.06, 0.06)
             y = self.rng.uniform(-0.16, 0.16)
             yaw = self.rng.uniform(-35.0, 35.0)
-            z = 0.47
-            self.renderer.set_prim_transform(prim_path, translate=(x, y, z), rotate=(0.0, 0.0, yaw), scale=(1.0, 1.0, 1.0))
-            placements.append({"prim_path": prim_path, "translate": [x, y, z], "rotate_deg": [0.0, 0.0, yaw]})
+            z = self.object_z
+            self.renderer.set_prim_transform(
+                prim_path,
+                translate=(x, y, z),
+                rotate=(0.0, 0.0, yaw),
+                scale=(self.object_scale, self.object_scale, self.object_scale),
+            )
+            placements.append(
+                {
+                    "prim_path": prim_path,
+                    "translate": [x, y, z],
+                    "rotate_deg": [0.0, 0.0, yaw],
+                    "scale": self.object_scale,
+                }
+            )
 
         return SceneState(
             robot_config_index=config_index,

@@ -49,7 +49,24 @@ def _background_scenes(index: AssetIndex) -> list[Path]:
     return _prefer(candidates, ["scene", "room", "office", "kitchen", "tabletop", "background"], count=1)
 
 
-def add_procedural_table(renderer) -> None:
+def _filtered_hdris(index: AssetIndex, query: str | None = None) -> list[Path]:
+    hdris = index.hdris()
+    if not query:
+        query = "indoor,studio,kitchen,office,warehouse,room"
+    include = [token.strip().lower() for token in query.split(",") if token.strip()]
+    bad = ("outdoor", "forest", "field", "park", "street", "road", "airport", "beach", "mountain", "sky")
+    ranked = []
+    for path in hdris:
+        low = str(path).lower()
+        if any(token in low for token in bad) and not any(token in low for token in include):
+            continue
+        score = sum(token in low for token in include)
+        ranked.append((score, str(path), path))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [item[2] for item in ranked] or hdris
+
+
+def add_procedural_table(renderer, table_height: float = 0.72, table_size=(1.4, 0.9), table_thickness: float = 0.06) -> None:
     from pxr import Gf, Sdf, UsdGeom, UsdShade
 
     stage = renderer.stage
@@ -58,8 +75,8 @@ def add_procedural_table(renderer) -> None:
     floor.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, -0.03))
     floor.AddScaleOp().Set(Gf.Vec3f(2.5, 2.5, 0.02))
     table = UsdGeom.Cube.Define(stage, "/World/Table")
-    table.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.35))
-    table.AddScaleOp().Set(Gf.Vec3f(0.9, 0.6, 0.05))
+    table.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, table_height - table_thickness * 0.5))
+    table.AddScaleOp().Set(Gf.Vec3f(table_size[0] * 0.5, table_size[1] * 0.5, table_thickness * 0.5))
     mat = UsdShade.Material.Define(stage, "/World/TableMat")
     shader = UsdShade.Shader.Define(stage, "/World/TableMat/Shader")
     shader.CreateIdAttr("UsdPreviewSurface")
@@ -76,6 +93,13 @@ def build_demo_scene(
     robot_query: str = "franka",
     robot_usd: str | None = None,
     use_background: bool = False,
+    hdri_query: str | None = None,
+    table_height: float = 0.72,
+    object_z: float | None = None,
+    object_scale: float = 0.45,
+    robot_translate=(-0.95, 0.0, 0.72),
+    robot_rotate=(0.0, 0.0, 0.0),
+    robot_scale=1.0,
     log_fn=None,
 ) -> dict[str, list[str]]:
     def scene_log(message: str) -> None:
@@ -88,27 +112,49 @@ def build_demo_scene(
     if not robots and not robot_usd:
         robots = _search_assets(index, robot_needles, count=1)
     objects = _search_assets(index, ["cup", "box", "bottle", "can", "fruit", "block"], count=3, category="object")
-    hdris = index.hdris()
+    hdris = _filtered_hdris(index, query=hdri_query)
+    object_z = table_height + 0.08 if object_z is None else object_z
 
-    referenced = {"backgrounds": [], "robots": [], "objects": [], "object_prim_paths": [], "hdri": []}
+    referenced = {
+        "backgrounds": [],
+        "robots": [],
+        "objects": [],
+        "object_prim_paths": [],
+        "hdri": [],
+        "table_height": [str(table_height)],
+        "object_z": [str(object_z)],
+    }
     if backgrounds:
         scene_log(f"Opening background scene: {backgrounds[0]}")
         renderer.open_scene(str(backgrounds[0]))
         referenced["backgrounds"].append(str(backgrounds[0]))
     scene_log("Adding procedural floor/table")
-    add_procedural_table(renderer)
+    add_procedural_table(renderer, table_height=table_height)
 
     if robots:
         scene_log(f"Referencing robot USD: {robots[0]}")
-        renderer.reference_asset(str(robots[0]), "/World/Robot", translate=(-0.6, 0.0, 0.0), scale=(1.0, 1.0, 1.0))
+        renderer.reference_asset(
+            str(robots[0]),
+            "/World/Robot",
+            translate=robot_translate,
+            rotate=robot_rotate,
+            scale=(robot_scale, robot_scale, robot_scale),
+        )
         referenced["robots"].append(str(robots[0]))
+        scene_log("Referenced robot USD")
     for idx, obj in enumerate(objects):
         x = -0.25 + 0.25 * idx
         prim_path = f"/World/Object_{idx}"
         scene_log(f"Referencing foreground object USD: {obj} -> {prim_path}")
-        renderer.reference_asset(str(obj), prim_path, translate=(x, 0.0, 0.47), scale=(1.0, 1.0, 1.0))
+        renderer.reference_asset(
+            str(obj),
+            prim_path,
+            translate=(x, 0.0, object_z),
+            scale=(object_scale, object_scale, object_scale),
+        )
         referenced["objects"].append(str(obj))
         referenced["object_prim_paths"].append(prim_path)
+        scene_log(f"Referenced foreground object USD: {prim_path}")
     if hdris:
         scene_log(f"Setting dome HDRI: {hdris[0]}")
         renderer.set_dome_light(str(hdris[0]), intensity=1200.0, rotation_deg=0.0)
@@ -132,6 +178,13 @@ def run(args: argparse.Namespace) -> None:
             robot_query=args.robot_query,
             robot_usd=args.robot_usd,
             use_background=args.use_background,
+            hdri_query=args.hdri_query,
+            table_height=args.table_height,
+            object_z=args.object_z,
+            object_scale=args.object_scale,
+            robot_translate=(args.robot_x, args.robot_y, args.robot_z),
+            robot_rotate=(0.0, 0.0, args.robot_yaw),
+            robot_scale=args.robot_scale,
         )
         print(f"Phase 0 referenced assets: {referenced}")
         cameras = renderer.add_orbit_cameras(
@@ -181,6 +234,15 @@ def main() -> None:
     parser.add_argument("--robot_query", default="franka")
     parser.add_argument("--robot_usd", default=None, help="Explicit Franka/Panda USD path to reference at /World/Robot.")
     parser.add_argument("--use_background", action="store_true", help="Open a full background scene USD if one can be identified.")
+    parser.add_argument("--hdri_query", default="indoor,studio,kitchen,office,warehouse,room")
+    parser.add_argument("--table_height", type=float, default=0.72)
+    parser.add_argument("--object_z", type=float, default=None)
+    parser.add_argument("--object_scale", type=float, default=0.45)
+    parser.add_argument("--robot_x", type=float, default=-0.95)
+    parser.add_argument("--robot_y", type=float, default=0.0)
+    parser.add_argument("--robot_z", type=float, default=0.72)
+    parser.add_argument("--robot_yaw", type=float, default=0.0)
+    parser.add_argument("--robot_scale", type=float, default=1.0)
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)
     run(parser.parse_args())
