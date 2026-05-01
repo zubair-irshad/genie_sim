@@ -84,14 +84,32 @@ data/demo_phase0/
 
 ## Phase 1 Demo
 
+By default the demo runner now generates only the two self-contained components
+that do not need sidecar model/training processes: ISP modification and shadow
+simulation.
+
 ```bash
 $PYTHON demo_paired_data.py --assets_root assets/geniesim --output_dir data/demo
 ```
+
+If the Franka/Panda USD lives outside the asset root, pass it explicitly:
+
+```bash
+$PYTHON demo_paired_data.py \
+  --assets_root GenieSimAssets \
+  --robot_usd assets/roboverse_data/robots/franka/usd/franka_v2.usd \
+  --output_dir data/demo
+```
+
+For each ISP/shadow pair the runner applies one of several valid Franka arm
+configurations and jitters the foreground objects on the tabletop. The applied
+configuration is recorded in each pair's `metadata.json`.
 
 Components that need external models accept sidecar commands:
 
 ```bash
 $PYTHON demo_paired_data.py \
+  --include_external \
   --gsplat_command /path/to/train_gs_strategy \
   --gsplat_render_command /path/to/render_gs \
   --relighting_command /path/to/relight_diffusion

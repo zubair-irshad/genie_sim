@@ -7,6 +7,7 @@ from pathlib import Path
 from demo_phase0 import build_demo_scene
 from diffusion_harmonizer.asset_manager import AssetIndex
 from diffusion_harmonizer.components import isp_modification, shadow_simulation
+from diffusion_harmonizer.components.scene_randomization import Phase1SceneRandomizer
 from diffusion_harmonizer.rendering import launch_renderer
 
 
@@ -48,11 +49,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate Genie Sim demo pairs for DiffusionHarmonizer components.")
     parser.add_argument("--assets_root", default="assets/geniesim")
     parser.add_argument("--output_dir", default="data/demo")
+    parser.add_argument("--robot_query", default="franka")
+    parser.add_argument("--robot_usd", default=None, help="Explicit Franka/Panda USD path. Use this when assets_root is GenieSimAssets but Franka lives elsewhere.")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--isp_count", type=int, default=30)
+    parser.add_argument("--shadow_count", type=int, default=30)
     parser.add_argument("--gsplat_command", default=None)
     parser.add_argument("--gsplat_render_command", default=None)
     parser.add_argument("--relighting_command", default=None)
-    parser.add_argument("--skip_external", action="store_true", help="Skip relighting and 3DGS components that require sidecars.")
+    parser.add_argument("--include_external", action="store_true", help="Also run relighting and 3DGS components that require sidecars.")
+    parser.add_argument("--use_background", action="store_true", help="Open a full indoor background USD if one can be identified.")
     args = parser.parse_args()
 
     index = AssetIndex(args.assets_root)
@@ -64,13 +70,28 @@ def main() -> None:
     master: dict[str, dict[str, dict[str, str]]] = {"train": {}}
     output = Path(args.output_dir)
     try:
-        build_demo_scene(renderer, index)
+        referenced = build_demo_scene(
+            renderer,
+            index,
+            robot_query=args.robot_query,
+            robot_usd=args.robot_usd,
+            use_background=args.use_background,
+        )
+        print(f"Phase 1 referenced assets: {referenced}")
+        randomize_scene = Phase1SceneRandomizer(
+            renderer,
+            robot_prim_path="/World/Robot",
+            object_prim_paths=referenced.get("object_prim_paths", []),
+            seed=args.seed,
+        )
         master["train"].update(
             isp_modification.generate_pairs(
                 renderer,
                 output / "isp_modification" / "demo",
-                count=30,
+                count=args.isp_count,
+                foreground_paths=["Robot", "Object_", "franka", "panda", "object"],
                 seed=args.seed,
+                pre_pair_callback=randomize_scene,
             )
         )
         master["train"].update(
@@ -78,11 +99,12 @@ def main() -> None:
                 renderer,
                 assets_root=args.assets_root,
                 output_dir=output / "shadow_simulation" / "demo",
-                count=30,
+                count=args.shadow_count,
                 seed=args.seed,
+                pre_pair_callback=randomize_scene,
             )
         )
-        if not args.skip_external:
+        if args.include_external:
             from diffusion_harmonizer.components import artifacts_correction, asset_reinsertion, relighting
 
             master["train"].update(

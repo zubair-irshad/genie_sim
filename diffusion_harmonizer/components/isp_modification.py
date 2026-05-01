@@ -86,6 +86,7 @@ def generate_pairs(
     count: int = 30,
     foreground_paths: list[str] | None = None,
     seed: int = 42,
+    pre_pair_callback=None,
 ) -> dict[str, dict[str, str]]:
     rng = random.Random(seed)
     output = Path(output_dir)
@@ -95,6 +96,7 @@ def generate_pairs(
 
     for idx in range(count):
         camera = cameras[idx % len(cameras)]
+        scene_state = pre_pair_callback(idx, camera) if pre_pair_callback else {}
         frame = renderer.capture_frame(camera, rgb=True, segmentation=True)
         target = frame["rgb"]
         params = sample_isp_params(rng, scale=0.3 if idx >= int(count * 0.67) else 1.0)
@@ -112,7 +114,13 @@ def generate_pairs(
             output / pair_id(idx),
             mixed,
             target,
-            {"component": "isp_modification", "mode": mode, "camera": camera, "params": asdict(params)},
+            {
+                "component": "isp_modification",
+                "mode": mode,
+                "camera": camera,
+                "params": asdict(params),
+                "scene_state": scene_state,
+            },
             mask=mask,
         )
     return entries

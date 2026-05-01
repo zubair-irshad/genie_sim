@@ -101,6 +101,40 @@ class GenieSimRenderer:
         xf.AddRotateXYZOp().Set(Gf.Vec3f(rx, ry, rz))
         xf.AddScaleOp().Set(Gf.Vec3f(*scale))
 
+    def set_prim_transform(
+        self,
+        prim_path: str,
+        translate=(0, 0, 0),
+        rotate=(0, 0, 0),
+        scale=(1, 1, 1),
+    ) -> None:
+        from pxr import Gf, UsdGeom
+
+        prim = self.stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            return
+        xf = UsdGeom.Xformable(prim)
+        self._clear_xform_ops(xf)
+        xf.AddTranslateOp().Set(Gf.Vec3d(*translate))
+        xf.AddRotateXYZOp().Set(Gf.Vec3f(*rotate))
+        xf.AddScaleOp().Set(Gf.Vec3f(*scale))
+
+    def set_articulation_joint_positions(self, prim_path: str, joint_positions: dict[str, float]) -> dict[str, float]:
+        """Apply joint positions in radians, returning the joints that were applied.
+
+        Isaac's articulation API is preferred. The USD DriveAPI fallback exists so
+        visual-only robot USDs can still receive target poses when possible.
+        """
+
+        applied = self._set_articulation_positions(prim_path, joint_positions)
+        if applied:
+            self.step(2)
+            return applied
+        applied = self._set_joint_drive_targets(prim_path, joint_positions)
+        if applied:
+            self.step(2)
+        return applied
+
     def set_dome_light(self, hdri_path: str | None, intensity: float = 1000.0, rotation_deg: float = 0.0) -> None:
         """Create or update `/World/DomeLight`."""
 
@@ -323,6 +357,54 @@ class GenieSimRenderer:
 
     def shutdown(self) -> None:
         self._app.close()
+
+    def _set_articulation_positions(self, prim_path: str, joint_positions: dict[str, float]) -> dict[str, float]:
+        try:
+            from isaacsim.core.prims import SingleArticulation
+        except Exception:
+            return {}
+        try:
+            articulation = SingleArticulation(prim_path=prim_path, name=prim_path.strip("/").replace("/", "_"))
+            articulation.initialize()
+            dof_names = list(articulation.dof_names)
+            positions = articulation.get_joint_positions()
+            if positions is None:
+                positions = np.zeros(len(dof_names), dtype=np.float32)
+            else:
+                positions = np.asarray(positions, dtype=np.float32)
+            applied = {}
+            for name, value in joint_positions.items():
+                if name in dof_names:
+                    positions[dof_names.index(name)] = float(value)
+                    applied[name] = float(value)
+            if applied:
+                articulation.set_joint_positions(positions)
+            return applied
+        except Exception:
+            return {}
+
+    def _set_joint_drive_targets(self, prim_path: str, joint_positions: dict[str, float]) -> dict[str, float]:
+        from pxr import UsdPhysics
+
+        root = self.stage.GetPrimAtPath(prim_path)
+        if not root.IsValid():
+            return {}
+        wanted = {name.lower(): value for name, value in joint_positions.items()}
+        applied = {}
+        for prim in self.stage.Traverse():
+            path = str(prim.GetPath())
+            if not path.startswith(prim_path.rstrip("/") + "/"):
+                continue
+            name = prim.GetName().lower()
+            if name not in wanted:
+                continue
+            drive = UsdPhysics.DriveAPI.Get(prim, "angular")
+            if not drive:
+                drive = UsdPhysics.DriveAPI.Apply(prim, "angular")
+            # USD angular drive target positions are authored in degrees.
+            drive.CreateTargetPositionAttr(float(np.degrees(wanted[name])))
+            applied[prim.GetName()] = float(wanted[name])
+        return applied
 
     @staticmethod
     def _clear_xform_ops(xf) -> None:

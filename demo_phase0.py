@@ -74,17 +74,18 @@ def build_demo_scene(
     renderer,
     index: AssetIndex,
     robot_query: str = "franka",
+    robot_usd: str | None = None,
     use_background: bool = False,
 ) -> dict[str, list[str]]:
     backgrounds = _background_scenes(index) if use_background else []
     robot_needles = [robot_query, "franka", "panda"] if robot_query else ["franka", "panda", "G2", "genie"]
-    robots = _search_assets(index, robot_needles, count=1, category="robot")
-    if not robots:
+    robots = [Path(robot_usd)] if robot_usd else _search_assets(index, robot_needles, count=1, category="robot")
+    if not robots and not robot_usd:
         robots = _search_assets(index, robot_needles, count=1)
     objects = _search_assets(index, ["cup", "box", "bottle", "can", "fruit", "block"], count=3, category="object")
     hdris = index.hdris()
 
-    referenced = {"backgrounds": [], "robots": [], "objects": [], "hdri": []}
+    referenced = {"backgrounds": [], "robots": [], "objects": [], "object_prim_paths": [], "hdri": []}
     if backgrounds:
         renderer.open_scene(str(backgrounds[0]))
         referenced["backgrounds"].append(str(backgrounds[0]))
@@ -95,8 +96,10 @@ def build_demo_scene(
         referenced["robots"].append(str(robots[0]))
     for idx, obj in enumerate(objects):
         x = -0.25 + 0.25 * idx
-        renderer.reference_asset(str(obj), f"/World/Object_{idx}", translate=(x, 0.0, 0.47), scale=(1.0, 1.0, 1.0))
+        prim_path = f"/World/Object_{idx}"
+        renderer.reference_asset(str(obj), prim_path, translate=(x, 0.0, 0.47), scale=(1.0, 1.0, 1.0))
         referenced["objects"].append(str(obj))
+        referenced["object_prim_paths"].append(prim_path)
     if hdris:
         renderer.set_dome_light(str(hdris[0]), intensity=1200.0, rotation_deg=0.0)
         referenced["hdri"].append(str(hdris[0]))
@@ -112,7 +115,13 @@ def run(args: argparse.Namespace) -> None:
 
     renderer = launch_renderer(headless=args.headless, renderer_type=args.renderer_type)
     try:
-        referenced = build_demo_scene(renderer, index, robot_query=args.robot_query, use_background=args.use_background)
+        referenced = build_demo_scene(
+            renderer,
+            index,
+            robot_query=args.robot_query,
+            robot_usd=args.robot_usd,
+            use_background=args.use_background,
+        )
         print(f"Phase 0 referenced assets: {referenced}")
         cameras = renderer.add_orbit_cameras(
             "phase0_cam",
@@ -159,6 +168,7 @@ def main() -> None:
     parser.add_argument("--headless", action="store_true", default=True)
     parser.add_argument("--renderer_type", default="raytraced")
     parser.add_argument("--robot_query", default="franka")
+    parser.add_argument("--robot_usd", default=None, help="Explicit Franka/Panda USD path to reference at /World/Robot.")
     parser.add_argument("--use_background", action="store_true", help="Open a full background scene USD if one can be identified.")
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)

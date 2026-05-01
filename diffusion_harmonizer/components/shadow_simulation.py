@@ -27,6 +27,7 @@ def generate_pairs(
     output_dir: str | Path = "data/shadow_simulation/demo",
     count: int = 30,
     seed: int = 42,
+    pre_pair_callback=None,
 ) -> dict[str, dict[str, str]]:
     rng = random.Random(seed)
     index = AssetIndex(assets_root)
@@ -39,6 +40,7 @@ def generate_pairs(
     entries: dict[str, dict[str, str]] = {}
     for idx in range(count):
         camera = cameras[idx % len(cameras)]
+        scene_state = pre_pair_callback(idx, camera) if pre_pair_callback else {}
         hdri = str(rng.choice(hdris))
         dome_intensity = rng.uniform(500.0, 2000.0)
         dome_rotation = rng.uniform(0.0, 360.0)
@@ -76,6 +78,7 @@ def generate_pairs(
                 "dome_intensity": dome_intensity,
                 "dome_rotation_deg": dome_rotation,
                 "distant_light": sun,
+                "scene_state": scene_state,
                 "shadow_toggle_settings": [
                     "/rtx/shadows/enabled",
                     "/rtx/directLighting/shadows/enabled",
