@@ -262,6 +262,28 @@ class GenieSimRenderer:
                     attr = prim.CreateAttribute(attr_name, Sdf.ValueTypeNames.Bool)
                 attr.Set(bool(enabled))
 
+    def set_prim_visibility(self, prim_path: str, visible: bool) -> None:
+        """Set USD visibility on a prim root.
+
+        Used by paired-data components to render receiver-only passes without
+        robot/object cast shadows while preserving the same camera and lighting.
+        """
+
+        from pxr import UsdGeom
+
+        prim = self.stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            return
+        imageable = UsdGeom.Imageable(prim)
+        if visible:
+            imageable.MakeVisible()
+        else:
+            imageable.MakeInvisible()
+
+    def set_prims_visibility(self, prim_paths: list[str], visible: bool) -> None:
+        for prim_path in prim_paths:
+            self.set_prim_visibility(prim_path, visible)
+
     def add_camera(
         self,
         name: str,

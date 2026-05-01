@@ -38,26 +38,16 @@ def _filtered_hdris(index: AssetIndex, query: str | None = None) -> list[Path]:
     return [item[2] for item in ranked] or hdris
 
 
-def _attenuate_cast_shadows(image: np.ndarray, foreground: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Fallback when RTX shadow toggles do not remove shadows reliably.
+def _shadow_delta_mask(target: np.ndarray, no_shadow_input: np.ndarray, foreground: np.ndarray) -> np.ndarray:
+    diff = np.max(np.abs(target.astype(np.float32) - no_shadow_input.astype(np.float32)), axis=-1) / 255.0
+    return np.clip(diff * (1.0 - np.clip(foreground, 0.0, 1.0)), 0.0, 1.0)
 
-    This estimates dark cast-shadow regions on low-saturation tabletop/background
-    receivers and lifts only those pixels. Foreground assets are excluded.
-    """
 
+def _dilate_mask(mask: np.ndarray, pixels: int = 5) -> np.ndarray:
     import cv2
 
-    rgb = image.astype(np.float32) / 255.0
-    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
-    value = hsv[..., 2]
-    saturation = hsv[..., 1]
-    local_light = cv2.GaussianBlur(value, (0, 0), sigmaX=21.0, sigmaY=21.0)
-    shadow_score = np.clip((local_light - value - 0.045) / 0.22, 0.0, 1.0)
-    receiver = ((saturation < 0.42) & (local_light > 0.28)).astype(np.float32)
-    shadow_mask = shadow_score * receiver * (1.0 - np.clip(foreground, 0.0, 1.0))
-    shadow_mask = feather_mask(shadow_mask, sigma=4.0)
-    lifted = rgb + shadow_mask[..., None] * (local_light[..., None] - rgb) * 0.9
-    return (np.clip(lifted, 0.0, 1.0) * 255.0).astype(np.uint8), np.clip(shadow_mask, 0.0, 1.0)
+    kernel = np.ones((pixels, pixels), dtype=np.uint8)
+    return cv2.dilate((mask > 0.05).astype(np.uint8), kernel, iterations=1).astype(np.float32)
 
 
 def generate_pairs(
@@ -98,35 +88,36 @@ def generate_pairs(
         renderer.set_path_tracing(True, spp=64)
         target_frame = renderer.capture_frame(camera, rgb=True, segmentation=True)
         target = target_frame["rgb"]
-        fg_mask = foreground_mask(
+        hard_fg_mask = foreground_mask(
             target_frame["segmentation"],
             target_frame["segmentation_mapping"] or {},
             foreground_paths,
         )
-        fg_mask = feather_mask(fg_mask, sigma=2.0)
+        if float(np.mean(hard_fg_mask > 0.05)) < 0.002:
+            continue
+        fg_exclusion = _dilate_mask(hard_fg_mask, pixels=7)
+        fg_mask = feather_mask(hard_fg_mask, sigma=1.5)
 
-        # Keep lighting fixed. Component 4 should isolate missing/weak shadow
-        # artifacts; foreground/background relighting belongs to Component 3.
-        renderer.set_dome_light(hdri, intensity=dome_intensity, rotation_deg=dome_rotation)
-        renderer.set_distant_light(intensity=sun["intensity"], angle_deg=sun["angle_deg"], direction=sun["direction"])
-        renderer.set_shadows_enabled(False)
-        renderer.set_path_tracing(True, spp=64)
-        degraded = renderer.capture_frame(camera, rgb=True)["rgb"]
-        renderer.set_shadows_enabled(True)
+        # Render the exact same receiver/background pass with foreground prims
+        # hidden. Compositing the target foreground over this receiver removes
+        # robot/object cast shadows without changing lighting, exposure, HDRI,
+        # camera pose, or foreground appearance.
+        try:
+            renderer.set_prims_visibility(list(foreground_paths), False)
+            receiver_only = renderer.capture_frame(camera, rgb=True)["rgb"]
+        finally:
+            renderer.set_prims_visibility(list(foreground_paths), True)
 
+        degraded = (
+            fg_mask[..., None] * target.astype(np.float32)
+            + (1.0 - fg_mask[..., None]) * receiver_only.astype(np.float32)
+        ).astype(np.uint8)
         diff = np.abs(target.astype(np.int16) - degraded.astype(np.int16)).astype(np.uint8)
-        attenuated, shadow_mask = _attenuate_cast_shadows(target, fg_mask)
-        shadow_region = shadow_mask > 0.05
-        non_shadow_region = shadow_mask <= 0.02
-        render_shadow_delta = float(np.mean(diff[shadow_region])) if np.any(shadow_region) else 0.0
-        render_non_shadow_delta = float(np.mean(diff[non_shadow_region])) if np.any(non_shadow_region) else float(np.mean(diff))
-        fallback_used = render_shadow_delta < 8.0 or render_non_shadow_delta > 6.0
-        if fallback_used:
-            degraded = attenuated
-            diff = np.abs(target.astype(np.int16) - degraded.astype(np.int16)).astype(np.uint8)
+        shadow_mask = _shadow_delta_mask(target, degraded, fg_exclusion)
         pair_dir = output / pair_id(idx)
         save_png(pair_dir / "shadow_diff.png", diff)
         save_png(pair_dir / "shadow_mask.png", np.repeat((shadow_mask * 255).astype(np.uint8)[..., None], 3, axis=-1))
+        save_png(pair_dir / "receiver_only.png", receiver_only)
         key = f"shadow_{pair_id(idx)}"
         entries[key] = write_pair(
             pair_dir,
@@ -139,17 +130,10 @@ def generate_pairs(
                 "dome_intensity": dome_intensity,
                 "dome_rotation_deg": dome_rotation,
                 "distant_light": sun,
-                "degradation": "same lights with cast shadows disabled or attenuated",
-                "shadow_attenuation_fallback": fallback_used,
-                "render_shadow_delta": render_shadow_delta,
-                "render_non_shadow_delta": render_non_shadow_delta,
+                "degradation": "foreground composited over receiver-only render with identical lighting",
+                "foreground_visibility_hidden_for_receiver_pass": list(foreground_paths),
+                "shadow_mask_coverage": float(np.mean(shadow_mask > 0.03)),
                 "scene_state": scene_state,
-                "shadow_toggle_settings": [
-                    "/rtx/shadows/enabled",
-                    "/rtx/directLighting/shadows/enabled",
-                    "/rtx/raytracing/shadows/enabled",
-                    "/persistent/rtx/shadows/enabled",
-                ],
             },
         )
     return entries
