@@ -70,9 +70,12 @@ class GenieSimRenderer:
     def open_scene(self, usd_path: str) -> None:
         """Open an existing USD scene file."""
 
+        from isaacsim.core.api import World
+
         usd = str(Path(usd_path).expanduser())
         self._omni_usd.get_context().open_stage(usd)
         self.stage = self._omni_usd.get_context().get_stage()
+        self.world = World(stage_units_in_meters=1.0)
         self.world.reset()
 
     def reference_asset(

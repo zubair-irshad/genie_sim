@@ -27,6 +27,18 @@ def _prefer(paths: list[Path], needles: list[str], count: int = 1) -> list[Path]
     return [item[2] for item in ranked[:count]]
 
 
+def _background_scenes(index: AssetIndex) -> list[Path]:
+    bad_tokens = ("/light/", "/lights/", "/hdr/", "/texture/", "/textures/", "/material/", "/materials/")
+    candidates = []
+    for path in index.backgrounds():
+        low = "/" + str(path).lower().replace("\\", "/") + "/"
+        if any(token in low for token in bad_tokens):
+            continue
+        if any(token in low for token in ("/scene", "/scenes", "/room", "/rooms", "/background")):
+            candidates.append(path)
+    return _prefer(candidates, ["scene", "room", "office", "kitchen", "tabletop", "background"], count=1)
+
+
 def add_procedural_table(renderer) -> None:
     from pxr import Gf, Sdf, UsdGeom, UsdShade
 
@@ -44,16 +56,17 @@ def add_procedural_table(renderer) -> None:
 
 
 def build_demo_scene(renderer, index: AssetIndex) -> dict[str, list[str]]:
-    backgrounds = index.backgrounds()
+    backgrounds = _background_scenes(index)
     robots = _prefer(index.robots(), ["G2", "genie", "franka"], count=1)
     objects = _prefer(index.objects(), ["cup", "box", "bottle", "can", "fruit", "block"], count=3)
     hdris = index.hdris()
 
+    referenced = {"backgrounds": [], "robots": [], "objects": [], "hdri": []}
     if backgrounds:
         renderer.open_scene(str(backgrounds[0]))
+        referenced["backgrounds"].append(str(backgrounds[0]))
     add_procedural_table(renderer)
 
-    referenced = {"robots": [], "objects": [], "hdri": []}
     if robots:
         renderer.reference_asset(str(robots[0]), "/World/Robot", translate=(-0.6, 0.0, 0.0), scale=(1.0, 1.0, 1.0))
         referenced["robots"].append(str(robots[0]))

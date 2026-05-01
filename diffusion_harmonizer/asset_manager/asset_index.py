@@ -59,6 +59,8 @@ class AssetIndex:
 
         if suffix in HDRI_SUFFIXES or "hdri" in full or "dome" in full:
             return "hdri"
+        if "/light/" in f"/{full}/" or "/lights/" in f"/{full}/":
+            return "light"
         if "robot" in full or top in {"robot", "robots"}:
             return "robot"
         if any(token in full for token in ("background", "scene", "room", "env")):
