@@ -56,8 +56,10 @@ def generate_pairs(
         renderer.set_path_tracing(True, spp=64)
         target = renderer.capture_frame(camera, rgb=True)["rgb"]
 
-        renderer.set_distant_light(intensity=None)
-        renderer.set_dome_light(hdri, intensity=dome_intensity * 3.0, rotation_deg=dome_rotation)
+        # Keep lighting fixed. Component 4 should isolate missing/weak shadow
+        # artifacts; foreground/background relighting belongs to Component 3.
+        renderer.set_dome_light(hdri, intensity=dome_intensity, rotation_deg=dome_rotation)
+        renderer.set_distant_light(intensity=sun["intensity"], angle_deg=sun["angle_deg"], direction=sun["direction"])
         renderer.set_shadows_enabled(False)
         renderer.set_path_tracing(True, spp=64)
         degraded = renderer.capture_frame(camera, rgb=True)["rgb"]
@@ -78,6 +80,7 @@ def generate_pairs(
                 "dome_intensity": dome_intensity,
                 "dome_rotation_deg": dome_rotation,
                 "distant_light": sun,
+                "degradation": "same lights with RTX shadows disabled",
                 "scene_state": scene_state,
                 "shadow_toggle_settings": [
                     "/rtx/shadows/enabled",
