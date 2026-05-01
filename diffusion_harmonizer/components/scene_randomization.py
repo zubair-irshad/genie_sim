@@ -37,8 +37,8 @@ class Phase1SceneRandomizer:
         renderer,
         robot_prim_path: str = "/World/Robot",
         object_prim_paths: list[str] | None = None,
-        object_z: float = 0.8,
-        object_scale: float = 0.45,
+        object_z: float = 0.722,
+        object_scale: float = 0.8,
         seed: int = 42,
     ):
         self.renderer = renderer
@@ -76,12 +76,14 @@ class Phase1SceneRandomizer:
                 rotate=(0.0, 0.0, yaw),
                 scale=(self.object_scale, self.object_scale, self.object_scale),
             )
+            align_delta = self.renderer.align_prim_bottom_to_z(prim_path, z)
             placements.append(
                 {
                     "prim_path": prim_path,
                     "translate": [x, y, z],
                     "rotate_deg": [0.0, 0.0, yaw],
                     "scale": self.object_scale,
+                    "bottom_alignment_dz": align_delta,
                 }
             )
 

@@ -96,7 +96,7 @@ def build_demo_scene(
     hdri_query: str | None = None,
     table_height: float = 0.72,
     object_z: float | None = None,
-    object_scale: float = 0.45,
+    object_scale: float = 0.8,
     robot_translate=(-0.95, 0.0, 0.72),
     robot_rotate=(0.0, 0.0, 0.0),
     robot_scale=1.0,
@@ -113,7 +113,7 @@ def build_demo_scene(
         robots = _search_assets(index, robot_needles, count=1)
     objects = _search_assets(index, ["cup", "box", "bottle", "can", "fruit", "block"], count=3, category="object")
     hdris = _filtered_hdris(index, query=hdri_query)
-    object_z = table_height + 0.08 if object_z is None else object_z
+    object_z = table_height + 0.002 if object_z is None else object_z
 
     referenced = {
         "backgrounds": [],
@@ -140,8 +140,9 @@ def build_demo_scene(
             rotate=robot_rotate,
             scale=(robot_scale, robot_scale, robot_scale),
         )
+        robot_delta = renderer.align_prim_bottom_to_z("/World/Robot", table_height + 0.002)
         referenced["robots"].append(str(robots[0]))
-        scene_log("Referenced robot USD")
+        scene_log(f"Referenced robot USD; bottom alignment dz={robot_delta}")
     for idx, obj in enumerate(objects):
         x = -0.25 + 0.25 * idx
         prim_path = f"/World/Object_{idx}"
@@ -152,9 +153,10 @@ def build_demo_scene(
             translate=(x, 0.0, object_z),
             scale=(object_scale, object_scale, object_scale),
         )
+        object_delta = renderer.align_prim_bottom_to_z(prim_path, object_z)
         referenced["objects"].append(str(obj))
         referenced["object_prim_paths"].append(prim_path)
-        scene_log(f"Referenced foreground object USD: {prim_path}")
+        scene_log(f"Referenced foreground object USD: {prim_path}; bottom alignment dz={object_delta}")
     if hdris:
         scene_log(f"Setting dome HDRI: {hdris[0]}")
         renderer.set_dome_light(str(hdris[0]), intensity=1200.0, rotation_deg=0.0)
@@ -237,7 +239,7 @@ def main() -> None:
     parser.add_argument("--hdri_query", default="indoor,studio,kitchen,office,warehouse,room")
     parser.add_argument("--table_height", type=float, default=0.72)
     parser.add_argument("--object_z", type=float, default=None)
-    parser.add_argument("--object_scale", type=float, default=0.45)
+    parser.add_argument("--object_scale", type=float, default=0.8)
     parser.add_argument("--robot_x", type=float, default=-0.95)
     parser.add_argument("--robot_y", type=float, default=0.0)
     parser.add_argument("--robot_z", type=float, default=0.72)

@@ -124,6 +124,44 @@ class GenieSimRenderer:
         xf.AddRotateXYZOp().Set(Gf.Vec3f(*rotate))
         xf.AddScaleOp().Set(Gf.Vec3f(*scale))
 
+    def align_prim_bottom_to_z(self, prim_path: str, target_z: float) -> float | None:
+        """Shift a prim so its world-space bounding-box bottom sits on `target_z`."""
+
+        from pxr import Gf, Usd, UsdGeom
+
+        prim = self.stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            return None
+        try:
+            self._app.update()
+        except Exception:
+            pass
+        bbox_cache = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(),
+            [UsdGeom.Tokens.default_, UsdGeom.Tokens.render, UsdGeom.Tokens.proxy],
+            useExtentsHint=True,
+        )
+        aligned = bbox_cache.ComputeWorldBound(prim).ComputeAlignedBox()
+        min_z = float(aligned.GetMin()[2])
+        delta_z = float(target_z) - min_z
+        if abs(delta_z) < 1e-5:
+            return delta_z
+
+        xf = UsdGeom.Xformable(prim)
+        translate_op = None
+        for op in xf.GetOrderedXformOps():
+            if op.GetOpType() == UsdGeom.XformOp.TypeTranslate:
+                translate_op = op
+                break
+        if translate_op is None:
+            translate_op = xf.AddTranslateOp()
+            translate = Gf.Vec3d(0.0, 0.0, delta_z)
+        else:
+            current = translate_op.Get() or Gf.Vec3d(0.0, 0.0, 0.0)
+            translate = Gf.Vec3d(float(current[0]), float(current[1]), float(current[2]) + delta_z)
+        translate_op.Set(translate)
+        return delta_z
+
     def set_articulation_joint_positions(self, prim_path: str, joint_positions: dict[str, float]) -> dict[str, float]:
         """Apply joint positions in radians, returning the joints that were applied.
 

@@ -58,7 +58,7 @@ def main() -> None:
     parser.add_argument("--hdri_query", default="indoor,studio,kitchen,office,warehouse,room")
     parser.add_argument("--table_height", type=float, default=0.72)
     parser.add_argument("--object_z", type=float, default=None)
-    parser.add_argument("--object_scale", type=float, default=0.45)
+    parser.add_argument("--object_scale", type=float, default=0.8)
     parser.add_argument("--robot_x", type=float, default=-0.95)
     parser.add_argument("--robot_y", type=float, default=0.0)
     parser.add_argument("--robot_z", type=float, default=0.72)
