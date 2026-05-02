@@ -262,6 +262,31 @@ class GenieSimRenderer:
                     attr = prim.CreateAttribute(attr_name, Sdf.ValueTypeNames.Bool)
                 attr.Set(bool(enabled))
 
+    def set_shadow_link_excludes(self, prim_paths: list[str], enabled: bool = True) -> list[str]:
+        """Exclude prims from casting shadows while keeping their illumination.
+
+        This uses USD/UsdLux shadow-linking. With includeRoot=True, all scene
+        geometry casts shadows by default; collection:shadowLink:excludes
+        subtracts foreground robot/objects from the shadow-caster collection for
+        every light. The foreground remains visible and lit.
+        """
+
+        from pxr import Sdf, UsdLux
+
+        resolved = self._resolve_prim_paths_or_prefixes(prim_paths)
+        light_types = (UsdLux.DomeLight, UsdLux.DistantLight, UsdLux.SphereLight, UsdLux.RectLight, UsdLux.DiskLight)
+        for prim in self.stage.Traverse():
+            if not prim.HasAPI(UsdLux.LightAPI) and not any(prim.IsA(light_type) for light_type in light_types):
+                continue
+            prim.CreateAttribute("collection:shadowLink:includeRoot", Sdf.ValueTypeNames.Bool, custom=False).Set(True)
+            prim.CreateAttribute("collection:shadowLink:expansionRule", Sdf.ValueTypeNames.Token, custom=False).Set("expandPrims")
+            rel = prim.CreateRelationship("collection:shadowLink:excludes", custom=False)
+            if enabled and resolved:
+                rel.SetTargets([Sdf.Path(path) for path in resolved])
+            else:
+                rel.ClearTargets(True)
+        return resolved
+
     def set_prim_visibility(self, prim_path: str, visible: bool) -> None:
         """Set USD visibility on a prim root.
 
@@ -271,10 +296,7 @@ class GenieSimRenderer:
 
         from pxr import UsdGeom
 
-        prim = self.stage.GetPrimAtPath(prim_path)
-        prims = [prim] if prim.IsValid() else []
-        if not prims:
-            prims = [candidate for candidate in self.stage.Traverse() if str(candidate.GetPath()).startswith(prim_path)]
+        prims = [self.stage.GetPrimAtPath(path) for path in self._resolve_prim_paths_or_prefixes([prim_path])]
         for candidate in prims:
             imageable = UsdGeom.Imageable(candidate)
             if visible:
@@ -499,6 +521,17 @@ class GenieSimRenderer:
         from pxr import UsdGeom
 
         UsdGeom.Xform.Define(self.stage, "/World")
+
+    def _resolve_prim_paths_or_prefixes(self, prim_paths: list[str]) -> list[str]:
+        resolved: list[str] = []
+        for prim_path in prim_paths:
+            prim = self.stage.GetPrimAtPath(prim_path)
+            if prim.IsValid():
+                resolved.append(str(prim.GetPath()))
+                continue
+            matches = [str(candidate.GetPath()) for candidate in self.stage.Traverse() if str(candidate.GetPath()).startswith(prim_path)]
+            resolved.extend(matches)
+        return sorted(set(resolved))
 
     @staticmethod
     def _rgb_array(data: Any) -> np.ndarray:

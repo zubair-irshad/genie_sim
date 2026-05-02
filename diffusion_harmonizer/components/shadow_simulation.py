@@ -9,8 +9,6 @@ import numpy as np
 from diffusion_harmonizer.asset_manager import AssetIndex
 from diffusion_harmonizer.components.common import (
     discover_demo_cameras,
-    feather_mask,
-    foreground_mask_from_visibility_difference,
     foreground_mask_with_fallback,
     pair_id,
 )
@@ -101,34 +99,24 @@ def generate_pairs(
             foreground_paths,
         )
 
-        # Render the exact same receiver/background pass with foreground prims
-        # hidden. Compositing the target foreground over this receiver removes
-        # robot/object cast shadows without changing lighting, exposure, HDRI,
-        # camera pose, or foreground appearance.
-        try:
-            renderer.set_prims_visibility(list(foreground_paths), False)
-            receiver_only = renderer.capture_frame(camera, rgb=True)["rgb"]
-        finally:
-            renderer.set_prims_visibility(list(foreground_paths), True)
+        # Same camera, same lights, same materials. USD shadow-linking removes
+        # foreground prims from the light shadow-caster collection while leaving
+        # them visible and illuminated. No post-hoc color or tone correction.
+        shadow_link_excludes = renderer.set_shadow_link_excludes(list(foreground_paths), enabled=True)
+        renderer.set_path_tracing(True, spp=64)
+        degraded = renderer.capture_frame(camera, rgb=True)["rgb"]
+        renderer.set_shadow_link_excludes(list(foreground_paths), enabled=False)
 
-        if float(np.mean(hard_fg_mask > 0.05)) < 0.002:
-            hard_fg_mask = foreground_mask_from_visibility_difference(target, receiver_only)
-            mask_source = "visibility_difference"
-        if float(np.mean(hard_fg_mask > 0.05)) < 0.002:
-            continue
-        fg_exclusion = _dilate_mask(hard_fg_mask, pixels=7)
-        fg_mask = feather_mask(hard_fg_mask, sigma=1.5)
-
-        degraded = (
-            fg_mask[..., None] * target.astype(np.float32)
-            + (1.0 - fg_mask[..., None]) * receiver_only.astype(np.float32)
-        ).astype(np.uint8)
         diff = np.abs(target.astype(np.int16) - degraded.astype(np.int16)).astype(np.uint8)
-        shadow_mask = _shadow_delta_mask(target, degraded, fg_exclusion)
+        if float(np.mean(hard_fg_mask > 0.05)) >= 0.002:
+            fg_exclusion = _dilate_mask(hard_fg_mask, pixels=7)
+            shadow_mask = _shadow_delta_mask(target, degraded, fg_exclusion)
+        else:
+            shadow_mask = np.max(diff.astype(np.float32), axis=-1) / 255.0
+            mask_source = "shadow_delta_no_foreground_mask"
         pair_dir = output / pair_id(idx)
         save_png(pair_dir / "shadow_diff.png", diff)
         save_png(pair_dir / "shadow_mask.png", np.repeat((shadow_mask * 255).astype(np.uint8)[..., None], 3, axis=-1))
-        save_png(pair_dir / "receiver_only.png", receiver_only)
         key = f"shadow_{pair_id(idx)}"
         entries[key] = write_pair(
             pair_dir,
@@ -141,8 +129,8 @@ def generate_pairs(
                 "dome_intensity": dome_intensity,
                 "dome_rotation_deg": dome_rotation,
                 "distant_light": sun,
-                "degradation": "foreground composited over receiver-only render with identical lighting",
-                "foreground_visibility_hidden_for_receiver_pass": list(foreground_paths),
+                "degradation": "UsdLux shadowLink excludes foreground casters; lighting unchanged",
+                "shadow_link_excludes": shadow_link_excludes,
                 "mask_source": mask_source,
                 "shadow_mask_coverage": float(np.mean(shadow_mask > 0.03)),
                 "scene_state": scene_state,
