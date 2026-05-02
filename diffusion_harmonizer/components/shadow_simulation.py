@@ -7,7 +7,13 @@ from pathlib import Path
 import numpy as np
 
 from diffusion_harmonizer.asset_manager import AssetIndex
-from diffusion_harmonizer.components.common import discover_demo_cameras, feather_mask, foreground_mask_with_fallback, pair_id
+from diffusion_harmonizer.components.common import (
+    discover_demo_cameras,
+    feather_mask,
+    foreground_mask_from_visibility_difference,
+    foreground_mask_with_fallback,
+    pair_id,
+)
 from diffusion_harmonizer.data.image_io import save_png, write_pair
 
 
@@ -94,10 +100,6 @@ def generate_pairs(
             target_frame["segmentation_mapping"] or {},
             foreground_paths,
         )
-        if float(np.mean(hard_fg_mask > 0.05)) < 0.002:
-            continue
-        fg_exclusion = _dilate_mask(hard_fg_mask, pixels=7)
-        fg_mask = feather_mask(hard_fg_mask, sigma=1.5)
 
         # Render the exact same receiver/background pass with foreground prims
         # hidden. Compositing the target foreground over this receiver removes
@@ -108,6 +110,14 @@ def generate_pairs(
             receiver_only = renderer.capture_frame(camera, rgb=True)["rgb"]
         finally:
             renderer.set_prims_visibility(list(foreground_paths), True)
+
+        if float(np.mean(hard_fg_mask > 0.05)) < 0.002:
+            hard_fg_mask = foreground_mask_from_visibility_difference(target, receiver_only)
+            mask_source = "visibility_difference"
+        if float(np.mean(hard_fg_mask > 0.05)) < 0.002:
+            continue
+        fg_exclusion = _dilate_mask(hard_fg_mask, pixels=7)
+        fg_mask = feather_mask(hard_fg_mask, sigma=1.5)
 
         degraded = (
             fg_mask[..., None] * target.astype(np.float32)

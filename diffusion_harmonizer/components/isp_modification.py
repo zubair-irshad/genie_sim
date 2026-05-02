@@ -7,7 +7,13 @@ from pathlib import Path
 
 import numpy as np
 
-from diffusion_harmonizer.components.common import discover_demo_cameras, feather_mask, foreground_mask_with_fallback, pair_id
+from diffusion_harmonizer.components.common import (
+    discover_demo_cameras,
+    feather_mask,
+    foreground_mask_from_visibility_difference,
+    foreground_mask_with_fallback,
+    pair_id,
+)
 from diffusion_harmonizer.data.image_io import save_png, write_pair
 
 
@@ -115,6 +121,14 @@ def generate_pairs(
                 foreground_paths,
             )
             if mask_source == "empty_foreground_mask":
+                try:
+                    renderer.set_prims_visibility(list(foreground_paths), False)
+                    receiver = renderer.capture_frame(camera, rgb=True)["rgb"]
+                finally:
+                    renderer.set_prims_visibility(list(foreground_paths), True)
+                mask = foreground_mask_from_visibility_difference(target, receiver)
+                mask_source = "visibility_difference"
+            if float(np.mean(mask > 0.05)) < 0.002:
                 continue
             mask = feather_mask(mask, sigma=3.0)
             mode = "masked_foreground"

@@ -38,9 +38,12 @@ class AssetIndex:
             if not path.is_file():
                 continue
             suffix = path.suffix.lower()
-            if suffix not in USD_SUFFIXES and suffix not in HDRI_SUFFIXES:
+            if suffix in USD_SUFFIXES:
+                category = self._category_for(path)
+            elif suffix in HDRI_SUFFIXES and self._looks_like_hdri(path):
+                category = "hdri"
+            else:
                 continue
-            category = self._category_for(path)
             records.append(
                 AssetRecord(
                     path=str(path),
@@ -51,13 +54,19 @@ class AssetIndex:
             )
         return records
 
+    def _looks_like_hdri(self, path: Path) -> bool:
+        rel_parts = path.relative_to(self.root).parts
+        top = rel_parts[0].lower() if rel_parts else ""
+        full = "/".join(part.lower() for part in rel_parts)
+        return "hdri" in full or "/hdr/" in f"/{full}/" or "dome" in full or top in {"hdri", "hdr", "envmap", "environment"}
+
     def _category_for(self, path: Path) -> str:
         rel_parts = path.relative_to(self.root).parts
         top = rel_parts[0].lower() if rel_parts else ""
         full = "/".join(part.lower() for part in rel_parts)
         suffix = path.suffix.lower()
 
-        if suffix in HDRI_SUFFIXES and ("hdri" in full or "dome" in full or top in {"hdri", "hdr", "envmap", "environment"}):
+        if suffix in HDRI_SUFFIXES and self._looks_like_hdri(path):
             return "hdri"
         if "/light/" in f"/{full}/" or "/lights/" in f"/{full}/":
             return "light"
@@ -106,7 +115,7 @@ class AssetIndex:
         return [Path(record.path) for record in self.records if record.category == category]
 
     def objects(self, category: str | None = None) -> list[Path]:
-        paths = self._paths("object")
+        paths = [path for path in self._paths("object") if path.suffix.lower() in USD_SUFFIXES]
         if category:
             needle = category.lower()
             paths = [path for path in paths if needle in str(path).lower()]

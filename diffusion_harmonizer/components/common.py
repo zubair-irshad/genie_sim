@@ -67,6 +67,30 @@ def foreground_mask_with_fallback(
     return np.zeros(segmentation.shape[:2], dtype=np.float32), "empty_foreground_mask"
 
 
+def foreground_mask_from_visibility_difference(
+    target_rgb: np.ndarray,
+    receiver_rgb: np.ndarray,
+    threshold: float = 0.10,
+) -> np.ndarray:
+    """Estimate visible foreground pixels from target vs foreground-hidden render.
+
+    This is a fallback for Isaac/Replicator builds where instance segmentation
+    produces no useful IDs. The threshold is intentionally fairly high so soft
+    cast shadows on the receiver are mostly excluded.
+    """
+
+    import cv2
+
+    target = target_rgb.astype(np.float32) / 255.0
+    receiver = receiver_rgb.astype(np.float32) / 255.0
+    diff = np.max(np.abs(target - receiver), axis=-1)
+    mask = (diff > threshold).astype(np.uint8)
+    kernel = np.ones((5, 5), dtype=np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    mask = cv2.dilate(mask, kernel, iterations=1)
+    return mask.astype(np.float32)
+
+
 def feather_mask(mask: np.ndarray, sigma: float = 3.0) -> np.ndarray:
     import cv2
 
