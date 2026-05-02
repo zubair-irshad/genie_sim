@@ -95,8 +95,10 @@ def build_demo_scene(
     use_background: bool = False,
     hdri_query: str | None = None,
     table_height: float = 0.72,
+    table_size=(1.4, 0.9),
     object_z: float | None = None,
     object_scale: float = 0.8,
+    object_paths: list[Path] | None = None,
     robot_translate=(-0.95, 0.0, 0.72),
     robot_rotate=(0.0, 0.0, 0.0),
     robot_scale=1.0,
@@ -111,7 +113,7 @@ def build_demo_scene(
     robots = [Path(robot_usd)] if robot_usd else _search_assets(index, robot_needles, count=1, category="robot")
     if not robots and not robot_usd:
         robots = _search_assets(index, robot_needles, count=1)
-    objects = _search_assets(index, ["cup", "box", "bottle", "can", "fruit", "block"], count=3, category="object")
+    objects = object_paths if object_paths is not None else _search_assets(index, ["cup", "box", "bottle", "can", "fruit", "block"], count=3, category="object")
     hdris = _filtered_hdris(index, query=hdri_query)
     object_z = table_height + 0.002 if object_z is None else object_z
 
@@ -122,6 +124,7 @@ def build_demo_scene(
         "object_prim_paths": [],
         "hdri": [],
         "table_height": [str(table_height)],
+        "table_size": [str(table_size[0]), str(table_size[1])],
         "object_z": [str(object_z)],
     }
     if backgrounds:
@@ -129,7 +132,7 @@ def build_demo_scene(
         renderer.open_scene(str(backgrounds[0]))
         referenced["backgrounds"].append(str(backgrounds[0]))
     scene_log("Adding procedural floor/table")
-    add_procedural_table(renderer, table_height=table_height)
+    add_procedural_table(renderer, table_height=table_height, table_size=table_size)
 
     if robots:
         scene_log(f"Referencing robot USD: {robots[0]}")

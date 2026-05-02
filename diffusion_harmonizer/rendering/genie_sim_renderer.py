@@ -162,6 +162,55 @@ class GenieSimRenderer:
         translate_op.Set(translate)
         return delta_z
 
+    def prim_bbox_extent(self, prim_path: str) -> tuple[float, float, float] | None:
+        """Return world-space aligned bounding-box extent for a prim."""
+
+        from pxr import Usd, UsdGeom
+
+        prim = self.stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            return None
+        try:
+            self._app.update()
+        except Exception:
+            pass
+        bbox_cache = UsdGeom.BBoxCache(
+            Usd.TimeCode.Default(),
+            [UsdGeom.Tokens.default_, UsdGeom.Tokens.render, UsdGeom.Tokens.proxy],
+            useExtentsHint=True,
+        )
+        aligned = bbox_cache.ComputeWorldBound(prim).ComputeAlignedBox()
+        extent = aligned.GetMax() - aligned.GetMin()
+        return (float(extent[0]), float(extent[1]), float(extent[2]))
+
+    def fit_prim_max_extent(self, prim_path: str, target_max_extent: float, min_scale: float = 0.05, max_scale: float = 5.0) -> float | None:
+        """Uniformly scale a prim so its max bbox dimension reaches target size."""
+
+        from pxr import Gf, UsdGeom
+
+        extent = self.prim_bbox_extent(prim_path)
+        if not extent:
+            return None
+        current = max(extent)
+        if current <= 1e-6:
+            return None
+        factor = max(min(float(target_max_extent) / current, max_scale), min_scale)
+        prim = self.stage.GetPrimAtPath(prim_path)
+        xf = UsdGeom.Xformable(prim)
+        scale_op = None
+        for op in xf.GetOrderedXformOps():
+            if op.GetOpType() == UsdGeom.XformOp.TypeScale:
+                scale_op = op
+                break
+        if scale_op is None:
+            scale_op = xf.AddScaleOp()
+            scale = Gf.Vec3f(factor, factor, factor)
+        else:
+            current_scale = scale_op.Get() or Gf.Vec3f(1.0, 1.0, 1.0)
+            scale = Gf.Vec3f(float(current_scale[0]) * factor, float(current_scale[1]) * factor, float(current_scale[2]) * factor)
+        scale_op.Set(scale)
+        return factor
+
     def set_articulation_joint_positions(self, prim_path: str, joint_positions: dict[str, float]) -> dict[str, float]:
         """Apply joint positions in radians, returning the joints that were applied.
 

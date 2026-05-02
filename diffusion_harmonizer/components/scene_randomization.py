@@ -2,30 +2,16 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from pathlib import Path
 
-
-FRANKA_CONFIGS = [
-    [0.0, -0.55, 0.0, -2.15, 0.0, 1.65, 0.78],
-    [0.35, -0.75, 0.25, -2.35, -0.15, 1.85, 1.05],
-    [-0.45, -0.65, -0.2, -2.05, 0.25, 1.55, 0.45],
-    [0.65, -0.45, -0.35, -1.85, 0.35, 1.35, 1.25],
-    [-0.25, -0.95, 0.55, -2.45, -0.35, 2.0, 0.15],
-    [0.15, -0.35, -0.55, -1.75, 0.45, 1.25, 0.95],
-]
-
-
-FRANKA_JOINT_NAME_SETS = [
-    [f"panda_joint{i}" for i in range(1, 8)],
-    [f"franka_joint{i}" for i in range(1, 8)],
-    [f"joint{i}" for i in range(1, 8)],
-]
+from diffusion_harmonizer.components.robot_pose_sampler import RobotPoseSampler
+from diffusion_harmonizer.scene_templates import ObjectPoolSampler, SceneTemplate
 
 
 @dataclass
 class SceneState:
-    robot_config_index: int
-    robot_joints: dict[str, float]
-    applied_joints: dict[str, float]
+    scene_id: str | None
+    robot_pose: dict[str, object]
     object_placements: list[dict[str, object]]
 
 
@@ -39,6 +25,9 @@ class Phase1SceneRandomizer:
         object_prim_paths: list[str] | None = None,
         object_z: float = 0.722,
         object_scale: float = 0.8,
+        templates: list[SceneTemplate] | None = None,
+        object_sampler: ObjectPoolSampler | None = None,
+        prefer_pyroki: bool = True,
         seed: int = 42,
     ):
         self.renderer = renderer
@@ -46,50 +35,85 @@ class Phase1SceneRandomizer:
         self.object_prim_paths = object_prim_paths or []
         self.object_z = object_z
         self.object_scale = object_scale
+        self.templates = templates or []
+        self.object_sampler = object_sampler
+        self.pose_sampler = RobotPoseSampler(seed=seed, prefer_pyroki=prefer_pyroki)
         self.rng = random.Random(seed)
 
     def __call__(self, pair_index: int, camera_name: str) -> dict[str, object]:
         del camera_name
-        config_index = pair_index % len(FRANKA_CONFIGS)
-        values = FRANKA_CONFIGS[config_index]
-        candidates = [
-            dict(zip(names, values))
-            for names in FRANKA_JOINT_NAME_SETS
-        ]
-        applied = {}
-        authored = candidates[0]
-        for candidate in candidates:
-            applied = self.renderer.set_articulation_joint_positions(self.robot_prim_path, candidate)
-            if applied:
-                authored = candidate
-                break
+        template = self.templates[pair_index % len(self.templates)] if self.templates else None
+        if template:
+            self.renderer.set_prim_transform(
+                self.robot_prim_path,
+                translate=template.robot_mount_xyz,
+                rotate=(0.0, 0.0, template.robot_yaw_deg),
+                scale=(1.0, 1.0, 1.0),
+            )
+            self.renderer.align_prim_bottom_to_z(self.robot_prim_path, template.table_height + 0.002)
 
         placements = []
-        for idx, prim_path in enumerate(self.object_prim_paths):
-            x = -0.25 + 0.25 * idx + self.rng.uniform(-0.06, 0.06)
-            y = self.rng.uniform(-0.16, 0.16)
+        active_paths = list(self.object_prim_paths)
+        if template and self.object_sampler:
+            lo, hi = template.object_count
+            count = min(len(active_paths), self.rng.randint(lo, hi))
+            assets = self.object_sampler.sample(template, count=count)
+            active_paths = active_paths[: len(assets)]
+        else:
+            assets = [None] * len(active_paths)
+
+        for idx, prim_path in enumerate(active_paths):
+            asset = assets[idx] if idx < len(assets) else None
+            if asset:
+                self.renderer.reference_asset(str(asset), prim_path)
+            if template:
+                x, y = self._sample_non_overlapping_xy(template.object_region_xy, placements)
+                z = template.table_height + 0.002
+                target_extent = self.rng.uniform(*template.object_size_range)
+            else:
+                x = -0.25 + 0.25 * idx + self.rng.uniform(-0.06, 0.06)
+                y = self.rng.uniform(-0.16, 0.16)
+                z = self.object_z
+                target_extent = None
             yaw = self.rng.uniform(-35.0, 35.0)
-            z = self.object_z
             self.renderer.set_prim_transform(
                 prim_path,
                 translate=(x, y, z),
                 rotate=(0.0, 0.0, yaw),
                 scale=(self.object_scale, self.object_scale, self.object_scale),
             )
+            fit_scale = self.renderer.fit_prim_max_extent(prim_path, target_extent) if target_extent else None
             align_delta = self.renderer.align_prim_bottom_to_z(prim_path, z)
             placements.append(
                 {
                     "prim_path": prim_path,
+                    "asset": str(Path(asset)) if asset else None,
                     "translate": [x, y, z],
                     "rotate_deg": [0.0, 0.0, yaw],
-                    "scale": self.object_scale,
+                    "base_scale": self.object_scale,
+                    "target_max_extent": target_extent,
+                    "fit_scale_multiplier": fit_scale,
                     "bottom_alignment_dz": align_delta,
                 }
             )
+        for prim_path in self.object_prim_paths[len(active_paths):]:
+            self.renderer.set_prim_visibility(prim_path, False)
+        for prim_path in active_paths:
+            self.renderer.set_prim_visibility(prim_path, True)
+
+        robot_pose = self.pose_sampler.sample_and_apply(self.renderer, self.robot_prim_path, placements, pair_index)
 
         return SceneState(
-            robot_config_index=config_index,
-            robot_joints=authored,
-            applied_joints=applied,
+            scene_id=template.scene_id if template else None,
+            robot_pose=robot_pose.__dict__,
             object_placements=placements,
         ).__dict__
+
+    def _sample_non_overlapping_xy(self, region: tuple[float, float, float, float], placements: list[dict[str, object]]) -> tuple[float, float]:
+        x0, x1, y0, y1 = region
+        for _ in range(30):
+            x = self.rng.uniform(x0, x1)
+            y = self.rng.uniform(y0, y1)
+            if all((x - float(item["translate"][0])) ** 2 + (y - float(item["translate"][1])) ** 2 > 0.16 ** 2 for item in placements):
+                return x, y
+        return self.rng.uniform(x0, x1), self.rng.uniform(y0, y1)

@@ -9,6 +9,8 @@ from diffusion_harmonizer.asset_manager import AssetIndex
 from diffusion_harmonizer.components import isp_modification, shadow_simulation
 from diffusion_harmonizer.components.scene_randomization import Phase1SceneRandomizer
 from diffusion_harmonizer.rendering import launch_renderer
+from diffusion_harmonizer.scene_templates import ObjectPoolSampler, generate_default_templates, load_templates, save_templates, validate_templates
+from diffusion_harmonizer.scene_templates.genie_generator_adapter import load_genie_scene_templates
 
 
 def log(message: str) -> None:
@@ -59,6 +61,7 @@ def main() -> None:
     parser.add_argument("--table_height", type=float, default=0.72)
     parser.add_argument("--object_z", type=float, default=None)
     parser.add_argument("--object_scale", type=float, default=0.8)
+    parser.add_argument("--objects_per_scene", type=int, default=4)
     parser.add_argument("--robot_x", type=float, default=-0.95)
     parser.add_argument("--robot_y", type=float, default=0.0)
     parser.add_argument("--robot_z", type=float, default=0.72)
@@ -72,6 +75,10 @@ def main() -> None:
     parser.add_argument("--relighting_command", default=None)
     parser.add_argument("--include_external", action="store_true", help="Also run relighting and 3DGS components that require sidecars.")
     parser.add_argument("--use_background", action="store_true", help="Open a full indoor background USD if one can be identified.")
+    parser.add_argument("--disable_scene_templates", action="store_true", help="Use the original single tabletop setup instead of generated validated templates.")
+    parser.add_argument("--scene_templates_path", default=None, help="JSON scene templates in diffusion_harmonizer.scene_templates schema.")
+    parser.add_argument("--genie_templates_path", default=None, help="Optional JSON exported by Genie Sim scene generator, normalized and validated before rendering.")
+    parser.add_argument("--template_count", type=int, default=12)
     args = parser.parse_args()
 
     if args.robot_usd and not Path(args.robot_usd).exists():
@@ -83,25 +90,50 @@ def main() -> None:
         raise FileNotFoundError(f"No assets indexed under {args.assets_root}. Finish the GenieSimAssets download first.")
     index.write_manifest(Path(args.assets_root) / "manifest.json")
     log(f"Indexed {len(index.records)} assets")
+    output = Path(args.output_dir)
+
+    templates = []
+    object_sampler = None
+    initial_objects = None
+    initial_template = None
+    if not args.disable_scene_templates:
+        if args.genie_templates_path:
+            templates = load_genie_scene_templates(args.genie_templates_path)
+        elif args.scene_templates_path and Path(args.scene_templates_path).exists():
+            templates = load_templates(args.scene_templates_path)
+        else:
+            templates = generate_default_templates(count=args.template_count, seed=args.seed)
+        validate_templates(templates)
+        object_sampler = ObjectPoolSampler(index, seed=args.seed)
+        initial_template = templates[0]
+        initial_objects = object_sampler.sample(initial_template, count=max(1, args.objects_per_scene))
+        output.mkdir(parents=True, exist_ok=True)
+        save_templates(templates, output / "scene_templates.json")
+        log(f"Using {len(templates)} validated scene templates; wrote {output / 'scene_templates.json'}")
 
     log("Launching Isaac Sim renderer")
     renderer = launch_renderer(headless=True)
     master: dict[str, dict[str, dict[str, str]]] = {"train": {}}
-    output = Path(args.output_dir)
     try:
         log("Building tabletop scene")
+        table_height = initial_template.table_height if initial_template else args.table_height
+        table_size = initial_template.table_size if initial_template else (1.4, 0.9)
+        robot_translate = initial_template.robot_mount_xyz if initial_template else (args.robot_x, args.robot_y, args.robot_z)
+        robot_yaw = initial_template.robot_yaw_deg if initial_template else args.robot_yaw
         referenced = build_demo_scene(
             renderer,
             index,
             robot_query=args.robot_query,
             robot_usd=args.robot_usd,
             use_background=args.use_background,
-            hdri_query=args.hdri_query,
-            table_height=args.table_height,
+            hdri_query=initial_template.hdri_query if initial_template else args.hdri_query,
+            table_height=table_height,
+            table_size=table_size,
             object_z=args.object_z,
             object_scale=args.object_scale,
-            robot_translate=(args.robot_x, args.robot_y, args.robot_z),
-            robot_rotate=(0.0, 0.0, args.robot_yaw),
+            object_paths=initial_objects,
+            robot_translate=robot_translate,
+            robot_rotate=(0.0, 0.0, robot_yaw),
             robot_scale=args.robot_scale,
             log_fn=log,
         )
@@ -112,6 +144,8 @@ def main() -> None:
             object_prim_paths=referenced.get("object_prim_paths", []),
             object_z=float(referenced["object_z"][0]),
             object_scale=args.object_scale,
+            templates=templates,
+            object_sampler=object_sampler,
             seed=args.seed,
         )
         if args.isp_count > 0:
