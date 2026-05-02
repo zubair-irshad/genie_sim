@@ -26,6 +26,7 @@ class Phase1SceneRandomizer:
         object_prim_paths: list[str] | None = None,
         object_z: float = 0.722,
         object_scale: float = 0.8,
+        object_surface_sink: float = 0.006,
         templates: list[SceneTemplate] | None = None,
         object_sampler: ObjectPoolSampler | None = None,
         prefer_pyroki: bool = True,
@@ -36,6 +37,7 @@ class Phase1SceneRandomizer:
         self.object_prim_paths = object_prim_paths or []
         self.object_z = object_z
         self.object_scale = object_scale
+        self.object_surface_sink = object_surface_sink
         self.templates = templates or []
         self.object_sampler = object_sampler
         self.pose_sampler = RobotPoseSampler(seed=seed, prefer_pyroki=prefer_pyroki)
@@ -46,6 +48,7 @@ class Phase1SceneRandomizer:
         template = self.templates[pair_index % len(self.templates)] if self.templates else None
         if template:
             self.renderer.set_preview_surface_material("/World/TableMat/Shader", template.table_color, template.table_roughness)
+            self.renderer.set_prim_display_color("/World/Table", template.table_color)
             hdri = self.object_sampler.sample_hdri(template) if self.object_sampler else None
             if hdri:
                 self.renderer.set_dome_light(str(hdri), intensity=1200.0, rotation_deg=self.rng.uniform(0.0, 360.0))
@@ -55,7 +58,7 @@ class Phase1SceneRandomizer:
                 rotate=(0.0, 0.0, template.robot_yaw_deg),
                 scale=(1.0, 1.0, 1.0),
             )
-            self.renderer.align_prim_bottom_to_z(self.robot_prim_path, template.table_height)
+            self.renderer.align_prim_bottom_to_z(self.robot_prim_path, template.table_height - 0.001)
 
         placements = []
         active_paths = list(self.object_prim_paths)
@@ -73,7 +76,7 @@ class Phase1SceneRandomizer:
                 self.renderer.reference_asset(str(asset), prim_path)
             if template:
                 x, y = self._sample_non_overlapping_xy(template.object_region_xy, placements)
-                z = template.table_height
+                z = template.table_height - self.object_surface_sink
                 target_extent = self.rng.uniform(*template.object_size_range)
             else:
                 x = -0.25 + 0.25 * idx + self.rng.uniform(-0.06, 0.06)

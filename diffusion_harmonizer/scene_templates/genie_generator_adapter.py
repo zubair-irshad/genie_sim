@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from diffusion_harmonizer.scene_templates.templates import SceneTemplate, validate_templates
+from diffusion_harmonizer.scene_templates.templates import (
+    SceneTemplate,
+    normalize_object_size_range,
+    normalize_table_color,
+    validate_templates,
+)
 
 
 def load_genie_scene_templates(path: str | Path) -> list[SceneTemplate]:
@@ -30,9 +35,9 @@ def load_genie_scene_templates(path: str | Path) -> list[SceneTemplate]:
                 object_region_xy=tuple(item.get("object_region_xy", (-0.45, 0.35, -0.25, 0.25))),
                 object_count=tuple(item.get("object_count", (2, 4))),
                 object_queries=tuple(item.get("object_queries", ("bottle", "cup", "box"))),
-                object_size_range=tuple(item.get("object_size_range", (0.14, 0.34))),
-                table_color=tuple(item.get("table_color", (0.72, 0.68, 0.60))),
-                table_roughness=float(item.get("table_roughness", 0.58)),
+                object_size_range=normalize_object_size_range(tuple(item.get("object_size_range", (0.11, 0.24)))),
+                table_color=normalize_table_color(tuple(item.get("table_color", (0.34, 0.29, 0.22)))),
+                table_roughness=float(item.get("table_roughness", 0.62)),
                 hdri_query=str(item.get("hdri_query", "indoor,studio,room")),
                 background_query=str(item.get("background_query", item.get("description", ""))),
             )

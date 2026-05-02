@@ -134,8 +134,8 @@ def main() -> None:
         log("Building tabletop scene")
         table_height = initial_template.table_height if initial_template else args.table_height
         table_size = initial_template.table_size if initial_template else (1.4, 0.9)
-        table_color = initial_template.table_color if initial_template else (0.72, 0.68, 0.60)
-        table_roughness = initial_template.table_roughness if initial_template else 0.58
+        table_color = initial_template.table_color if initial_template else (0.34, 0.29, 0.22)
+        table_roughness = initial_template.table_roughness if initial_template else 0.62
         robot_translate = initial_template.robot_mount_xyz if initial_template else (args.robot_x, args.robot_y, args.robot_z)
         robot_yaw = initial_template.robot_yaw_deg if initial_template else args.robot_yaw
         referenced = build_demo_scene(

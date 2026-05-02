@@ -228,6 +228,19 @@ class GenieSimRenderer:
         if roughness is not None:
             shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(float(roughness))
 
+    def set_prim_display_color(self, prim_path: str, color: tuple[float, float, float]) -> None:
+        """Set displayColor as a fallback for renderers/materials that ignore PreviewSurface."""
+
+        from pxr import Gf, UsdGeom
+
+        prim = self.stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            return
+        gprim = UsdGeom.Gprim(prim)
+        if not gprim:
+            return
+        gprim.CreateDisplayColorAttr([Gf.Vec3f(*[float(c) for c in color])])
+
     def set_articulation_joint_positions(self, prim_path: str, joint_positions: dict[str, float]) -> dict[str, float]:
         """Apply joint positions in radians, returning the joints that were applied.
 

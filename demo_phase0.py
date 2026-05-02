@@ -76,8 +76,8 @@ def add_procedural_table(
     table_height: float = 0.72,
     table_size=(1.4, 0.9),
     table_thickness: float = 0.06,
-    table_color=(0.72, 0.68, 0.60),
-    table_roughness: float = 0.58,
+    table_color=(0.34, 0.29, 0.22),
+    table_roughness: float = 0.62,
 ) -> None:
     from pxr import Gf, Sdf, UsdGeom, UsdShade
 
@@ -86,9 +86,11 @@ def add_procedural_table(
     floor = UsdGeom.Cube.Define(stage, "/World/Floor")
     floor.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, -0.03))
     floor.AddScaleOp().Set(Gf.Vec3f(2.5, 2.5, 0.02))
+    floor.CreateDisplayColorAttr([Gf.Vec3f(0.24, 0.24, 0.22)])
     table = UsdGeom.Cube.Define(stage, "/World/Table")
     table.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, table_height - table_thickness * 0.5))
     table.AddScaleOp().Set(Gf.Vec3f(table_size[0] * 0.5, table_size[1] * 0.5, table_thickness * 0.5))
+    table.CreateDisplayColorAttr([Gf.Vec3f(*[float(c) for c in table_color])])
     mat = UsdShade.Material.Define(stage, "/World/TableMat")
     shader = UsdShade.Shader.Define(stage, "/World/TableMat/Shader")
     shader.CreateIdAttr("UsdPreviewSurface")
@@ -108,8 +110,8 @@ def build_demo_scene(
     hdri_query: str | None = None,
     table_height: float = 0.72,
     table_size=(1.4, 0.9),
-    table_color=(0.72, 0.68, 0.60),
-    table_roughness: float = 0.58,
+    table_color=(0.34, 0.29, 0.22),
+    table_roughness: float = 0.62,
     object_z: float | None = None,
     object_scale: float = 0.8,
     object_paths: list[Path] | None = None,

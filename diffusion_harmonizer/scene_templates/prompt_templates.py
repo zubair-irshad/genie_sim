@@ -166,10 +166,10 @@ def _object_count_for_tokens(tokens: set[str]) -> tuple[int, int]:
 
 def _size_range_for_tokens(tokens: set[str]) -> tuple[float, float]:
     if {"industrial", "warehouse", "packing", "parcel"} & tokens:
-        return (0.16, 0.38)
+        return (0.13, 0.28)
     if {"laboratory", "lab", "clinic", "medicine", "tube"} & tokens:
-        return (0.11, 0.26)
-    return (0.14, 0.34)
+        return (0.08, 0.18)
+    return (0.11, 0.24)
 
 
 def _slug(text: str) -> str:

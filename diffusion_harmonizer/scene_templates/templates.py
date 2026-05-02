@@ -49,12 +49,12 @@ DEFAULT_TEMPLATE_SPECS = [
 
 
 TABLE_MATERIALS = [
-    ((0.72, 0.68, 0.60), 0.58),  # warm laminate
-    ((0.50, 0.54, 0.56), 0.72),  # gray workbench
-    ((0.40, 0.45, 0.48), 0.64),  # dark rubber mat
-    ((0.80, 0.74, 0.64), 0.50),  # light wood
-    ((0.58, 0.64, 0.66), 0.68),  # blue-gray laminate
-    ((0.62, 0.60, 0.56), 0.42),  # brushed neutral
+    ((0.34, 0.29, 0.22), 0.62),  # dark wood laminate
+    ((0.26, 0.31, 0.34), 0.76),  # blue-gray workbench
+    ((0.20, 0.23, 0.24), 0.68),  # dark rubber mat
+    ((0.42, 0.34, 0.24), 0.56),  # warm butcher block
+    ((0.24, 0.34, 0.32), 0.72),  # green-gray laminate
+    ((0.36, 0.35, 0.31), 0.50),  # brushed neutral
 ]
 
 
@@ -89,7 +89,7 @@ def generate_default_templates(count: int = 12, seed: int = 42) -> list[SceneTem
                 ),
                 object_count=(2, 4),
                 object_queries=tuple(queries),
-                object_size_range=(0.14, 0.34),
+                object_size_range=(0.11, 0.24),
                 table_color=table_color,
                 table_roughness=table_roughness,
                 hdri_query=hdri_query,
@@ -126,6 +126,26 @@ def validate_templates(templates: list[SceneTemplate]) -> None:
             raise ValueError(f"{template.scene_id}: invalid table_roughness")
 
 
+def normalize_object_size_range(size_range: tuple[float, float]) -> tuple[float, float]:
+    """Keep generated assets in a manipulation-scale range."""
+
+    lo, hi = float(size_range[0]), float(size_range[1])
+    lo = min(max(lo, 0.06), 0.18)
+    hi = min(max(hi, lo), 0.28)
+    return (lo, hi)
+
+
+def normalize_table_color(color: tuple[float, float, float]) -> tuple[float, float, float]:
+    """Avoid high-albedo tables that clip to white under strong HDRI lighting."""
+
+    values = tuple(min(max(float(channel), 0.0), 1.0) for channel in color)
+    max_channel = max(values)
+    if max_channel > 0.45:
+        scale = 0.45 / max_channel
+        values = tuple(channel * scale for channel in values)
+    return values
+
+
 def save_templates(templates: list[SceneTemplate], path: str | Path) -> Path:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -146,9 +166,9 @@ def load_templates(path: str | Path) -> list[SceneTemplate]:
             object_region_xy=tuple(item["object_region_xy"]),
             object_count=tuple(item["object_count"]),
             object_queries=tuple(item["object_queries"]),
-            object_size_range=tuple(item.get("object_size_range", (0.14, 0.34))),
-            table_color=tuple(item.get("table_color", (0.72, 0.68, 0.60))),
-            table_roughness=float(item.get("table_roughness", 0.58)),
+            object_size_range=normalize_object_size_range(tuple(item.get("object_size_range", (0.11, 0.24)))),
+            table_color=normalize_table_color(tuple(item.get("table_color", (0.34, 0.29, 0.22)))),
+            table_roughness=float(item.get("table_roughness", 0.62)),
             hdri_query=item["hdri_query"],
             background_query=item.get("background_query", ""),
         )
