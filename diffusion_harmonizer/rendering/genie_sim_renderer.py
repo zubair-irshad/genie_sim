@@ -272,13 +272,15 @@ class GenieSimRenderer:
         from pxr import UsdGeom
 
         prim = self.stage.GetPrimAtPath(prim_path)
-        if not prim.IsValid():
-            return
-        imageable = UsdGeom.Imageable(prim)
-        if visible:
-            imageable.MakeVisible()
-        else:
-            imageable.MakeInvisible()
+        prims = [prim] if prim.IsValid() else []
+        if not prims:
+            prims = [candidate for candidate in self.stage.Traverse() if str(candidate.GetPath()).startswith(prim_path)]
+        for candidate in prims:
+            imageable = UsdGeom.Imageable(candidate)
+            if visible:
+                imageable.MakeVisible()
+            else:
+                imageable.MakeInvisible()
 
     def set_prims_visibility(self, prim_paths: list[str], visible: bool) -> None:
         for prim_path in prim_paths:

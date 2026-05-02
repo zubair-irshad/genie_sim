@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from diffusion_harmonizer.asset_manager import AssetIndex
-from diffusion_harmonizer.components.common import discover_demo_cameras, feather_mask, foreground_mask, pair_id
+from diffusion_harmonizer.components.common import discover_demo_cameras, feather_mask, foreground_mask_with_fallback, pair_id
 from diffusion_harmonizer.data.image_io import save_png, write_pair
 
 
@@ -22,7 +22,8 @@ def _random_unit_vector_above_horizon(rng: random.Random) -> tuple[float, float,
 
 
 def _filtered_hdris(index: AssetIndex, query: str | None = None) -> list[Path]:
-    hdris = index.hdris()
+    texture_suffixes = {".hdr", ".exr", ".png", ".jpg", ".jpeg"}
+    hdris = [path for path in index.hdris() if path.suffix.lower() in texture_suffixes]
     if not query:
         return hdris
     include = [token.strip().lower() for token in query.split(",") if token.strip()]
@@ -88,7 +89,7 @@ def generate_pairs(
         renderer.set_path_tracing(True, spp=64)
         target_frame = renderer.capture_frame(camera, rgb=True, segmentation=True)
         target = target_frame["rgb"]
-        hard_fg_mask = foreground_mask(
+        hard_fg_mask, mask_source = foreground_mask_with_fallback(
             target_frame["segmentation"],
             target_frame["segmentation_mapping"] or {},
             foreground_paths,
@@ -132,6 +133,7 @@ def generate_pairs(
                 "distant_light": sun,
                 "degradation": "foreground composited over receiver-only render with identical lighting",
                 "foreground_visibility_hidden_for_receiver_pass": list(foreground_paths),
+                "mask_source": mask_source,
                 "shadow_mask_coverage": float(np.mean(shadow_mask > 0.03)),
                 "scene_state": scene_state,
             },

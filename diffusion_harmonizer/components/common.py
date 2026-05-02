@@ -25,6 +25,48 @@ def foreground_mask(segmentation: np.ndarray, mapping: dict[int, str], path_need
     return np.isin(segmentation, ids).astype(np.float32)
 
 
+def foreground_mask_by_instance_area(
+    segmentation: np.ndarray,
+    min_coverage: float = 0.0002,
+    max_coverage: float = 0.30,
+) -> np.ndarray:
+    """Fallback for Isaac instance masks when id->prim-path labels are absent.
+
+    The generated demos have a large procedural table/background plus smaller
+    robot/object foreground instances. This fallback keeps visible nonzero
+    instance IDs in a conservative area range and drops very large receiver IDs.
+    """
+
+    seg = np.asarray(segmentation)
+    if seg.size == 0:
+        return np.zeros(seg.shape[:2], dtype=np.float32)
+    selected = []
+    total = float(seg.shape[0] * seg.shape[1])
+    for idx in np.unique(seg):
+        if int(idx) == 0:
+            continue
+        coverage = float(np.count_nonzero(seg == idx)) / max(total, 1.0)
+        if min_coverage <= coverage <= max_coverage:
+            selected.append(idx)
+    if not selected:
+        return np.zeros(seg.shape[:2], dtype=np.float32)
+    return np.isin(seg, selected).astype(np.float32)
+
+
+def foreground_mask_with_fallback(
+    segmentation: np.ndarray,
+    mapping: dict[int, str],
+    path_needles: Iterable[str],
+) -> tuple[np.ndarray, str]:
+    mask = foreground_mask(segmentation, mapping, path_needles)
+    if float(np.mean(mask > 0.05)) >= 0.002:
+        return mask, "replicator_mapping"
+    fallback = foreground_mask_by_instance_area(segmentation)
+    if float(np.mean(fallback > 0.05)) >= 0.002:
+        return fallback, "instance_area_fallback"
+    return np.zeros(segmentation.shape[:2], dtype=np.float32), "empty_foreground_mask"
+
+
 def feather_mask(mask: np.ndarray, sigma: float = 3.0) -> np.ndarray:
     import cv2
 

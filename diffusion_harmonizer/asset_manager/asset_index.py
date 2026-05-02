@@ -7,7 +7,7 @@ from typing import Iterable
 
 
 USD_SUFFIXES = {".usd", ".usda", ".usdc"}
-HDRI_SUFFIXES = {".hdr", ".exr"}
+HDRI_SUFFIXES = {".hdr", ".exr", ".png", ".jpg", ".jpeg"}
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,7 @@ class AssetIndex:
         full = "/".join(part.lower() for part in rel_parts)
         suffix = path.suffix.lower()
 
-        if suffix in HDRI_SUFFIXES or "hdri" in full or "dome" in full:
+        if suffix in HDRI_SUFFIXES and ("hdri" in full or "dome" in full or top in {"hdri", "hdr", "envmap", "environment"}):
             return "hdri"
         if "/light/" in f"/{full}/" or "/lights/" in f"/{full}/":
             return "light"

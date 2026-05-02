@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from diffusion_harmonizer.components.common import discover_demo_cameras, feather_mask, foreground_mask, pair_id
+from diffusion_harmonizer.components.common import discover_demo_cameras, feather_mask, foreground_mask_with_fallback, pair_id
 from diffusion_harmonizer.data.image_io import save_png, write_pair
 
 
@@ -43,13 +43,6 @@ def sample_isp_params(rng: random.Random, scale: float = 1.0) -> ISPParams:
         hue_shift=rng.uniform(-15.0, 15.0) * scale,
         noise_sigma=rng.uniform(0.0, 10.0) * scale,
     )
-
-
-def _strict_foreground_mask(segmentation: np.ndarray, current_mask: np.ndarray) -> tuple[np.ndarray, str]:
-    coverage = float(np.mean(current_mask > 0.05))
-    if coverage >= 0.002:
-        return current_mask, "replicator_mapping"
-    return np.zeros(segmentation.shape[:2], dtype=np.float32), "empty_foreground_mask"
 
 
 def _kelvin_rgb(kelvin: int) -> np.ndarray:
@@ -116,8 +109,11 @@ def generate_pairs(
             mode = "full_frame_mild"
             mask_source = "full_frame"
         else:
-            mask = foreground_mask(frame["segmentation"], frame["segmentation_mapping"] or {}, foreground_paths)
-            mask, mask_source = _strict_foreground_mask(frame["segmentation"], mask)
+            mask, mask_source = foreground_mask_with_fallback(
+                frame["segmentation"],
+                frame["segmentation_mapping"] or {},
+                foreground_paths,
+            )
             if mask_source == "empty_foreground_mask":
                 continue
             mask = feather_mask(mask, sigma=3.0)
