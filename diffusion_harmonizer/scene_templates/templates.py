@@ -26,6 +26,8 @@ class SceneTemplate:
     object_count: tuple[int, int]
     object_queries: tuple[str, ...]
     object_size_range: tuple[float, float]
+    table_color: tuple[float, float, float]
+    table_roughness: float
     hdri_query: str
     background_query: str = ""
 
@@ -46,6 +48,16 @@ DEFAULT_TEMPLATE_SPECS = [
 ]
 
 
+TABLE_MATERIALS = [
+    ((0.72, 0.68, 0.60), 0.58),  # warm laminate
+    ((0.50, 0.54, 0.56), 0.72),  # gray workbench
+    ((0.40, 0.45, 0.48), 0.64),  # dark rubber mat
+    ((0.80, 0.74, 0.64), 0.50),  # light wood
+    ((0.58, 0.64, 0.66), 0.68),  # blue-gray laminate
+    ((0.62, 0.60, 0.56), 0.42),  # brushed neutral
+]
+
+
 def generate_default_templates(count: int = 12, seed: int = 42) -> list[SceneTemplate]:
     rng = random.Random(seed)
     templates: list[SceneTemplate] = []
@@ -60,13 +72,14 @@ def generate_default_templates(count: int = 12, seed: int = 42) -> list[SceneTem
         robot_x = mount_side * rng.uniform(0.72, 0.98)
         robot_y = rng.uniform(-0.10, 0.10)
         yaw = 180.0 if robot_x > 0 else 0.0
+        table_color, table_roughness = TABLE_MATERIALS[idx % len(TABLE_MATERIALS)]
         templates.append(
             SceneTemplate(
                 scene_id=f"{idx:02d}_{scene_id}",
                 description=description,
                 table_height=table_height,
                 table_size=(table_x, table_y),
-                robot_mount_xyz=(robot_x, robot_y, table_height + 0.002),
+                robot_mount_xyz=(robot_x, robot_y, table_height),
                 robot_yaw_deg=yaw,
                 object_region_xy=(
                     max(region[0], -table_x * 0.5 + margin),
@@ -76,7 +89,9 @@ def generate_default_templates(count: int = 12, seed: int = 42) -> list[SceneTem
                 ),
                 object_count=(2, 4),
                 object_queries=tuple(queries),
-                object_size_range=(0.075, 0.18),
+                object_size_range=(0.14, 0.34),
+                table_color=table_color,
+                table_roughness=table_roughness,
                 hdri_query=hdri_query,
                 background_query=description,
             )
@@ -105,6 +120,10 @@ def validate_templates(templates: list[SceneTemplate]) -> None:
         s_lo, s_hi = template.object_size_range
         if s_lo <= 0.0 or s_hi < s_lo:
             raise ValueError(f"{template.scene_id}: invalid object_size_range")
+        if len(template.table_color) != 3 or any(channel < 0.0 or channel > 1.0 for channel in template.table_color):
+            raise ValueError(f"{template.scene_id}: invalid table_color")
+        if not 0.0 <= template.table_roughness <= 1.0:
+            raise ValueError(f"{template.scene_id}: invalid table_roughness")
 
 
 def save_templates(templates: list[SceneTemplate], path: str | Path) -> Path:
@@ -127,7 +146,9 @@ def load_templates(path: str | Path) -> list[SceneTemplate]:
             object_region_xy=tuple(item["object_region_xy"]),
             object_count=tuple(item["object_count"]),
             object_queries=tuple(item["object_queries"]),
-            object_size_range=tuple(item["object_size_range"]),
+            object_size_range=tuple(item.get("object_size_range", (0.14, 0.34))),
+            table_color=tuple(item.get("table_color", (0.72, 0.68, 0.60))),
+            table_roughness=float(item.get("table_roughness", 0.58)),
             hdri_query=item["hdri_query"],
             background_query=item.get("background_query", ""),
         )

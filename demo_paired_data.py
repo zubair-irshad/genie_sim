@@ -9,7 +9,15 @@ from diffusion_harmonizer.asset_manager import AssetIndex
 from diffusion_harmonizer.components import isp_modification, shadow_simulation
 from diffusion_harmonizer.components.scene_randomization import Phase1SceneRandomizer
 from diffusion_harmonizer.rendering import launch_renderer
-from diffusion_harmonizer.scene_templates import ObjectPoolSampler, generate_default_templates, load_templates, save_templates, validate_templates
+from diffusion_harmonizer.scene_templates import (
+    ObjectPoolSampler,
+    generate_default_templates,
+    generate_templates_from_text_prompts,
+    load_prompt_file,
+    load_templates,
+    save_templates,
+    validate_templates,
+)
 from diffusion_harmonizer.scene_templates.genie_generator_adapter import load_genie_scene_templates
 
 
@@ -78,6 +86,8 @@ def main() -> None:
     parser.add_argument("--disable_scene_templates", action="store_true", help="Use the original single tabletop setup instead of generated validated templates.")
     parser.add_argument("--scene_templates_path", default=None, help="JSON scene templates in diffusion_harmonizer.scene_templates schema.")
     parser.add_argument("--genie_templates_path", default=None, help="Optional JSON exported by Genie Sim scene generator, normalized and validated before rendering.")
+    parser.add_argument("--scene_prompt_file", default=None, help="Plain-text/markdown natural-language scene prompts, one prompt per line.")
+    parser.add_argument("--scene_prompt", action="append", default=[], help="Inline natural-language scene prompt. Can be repeated.")
     parser.add_argument("--template_count", type=int, default=12)
     args = parser.parse_args()
 
@@ -99,6 +109,12 @@ def main() -> None:
     if not args.disable_scene_templates:
         if args.genie_templates_path:
             templates = load_genie_scene_templates(args.genie_templates_path)
+        elif args.scene_prompt_file or args.scene_prompt:
+            prompts = []
+            if args.scene_prompt_file:
+                prompts.extend(load_prompt_file(args.scene_prompt_file))
+            prompts.extend(args.scene_prompt)
+            templates = generate_templates_from_text_prompts(prompts, count=args.template_count, seed=args.seed)
         elif args.scene_templates_path and Path(args.scene_templates_path).exists():
             templates = load_templates(args.scene_templates_path)
         else:
@@ -118,6 +134,8 @@ def main() -> None:
         log("Building tabletop scene")
         table_height = initial_template.table_height if initial_template else args.table_height
         table_size = initial_template.table_size if initial_template else (1.4, 0.9)
+        table_color = initial_template.table_color if initial_template else (0.72, 0.68, 0.60)
+        table_roughness = initial_template.table_roughness if initial_template else 0.58
         robot_translate = initial_template.robot_mount_xyz if initial_template else (args.robot_x, args.robot_y, args.robot_z)
         robot_yaw = initial_template.robot_yaw_deg if initial_template else args.robot_yaw
         referenced = build_demo_scene(
@@ -129,6 +147,8 @@ def main() -> None:
             hdri_query=initial_template.hdri_query if initial_template else args.hdri_query,
             table_height=table_height,
             table_size=table_size,
+            table_color=table_color,
+            table_roughness=table_roughness,
             object_z=args.object_z,
             object_scale=args.object_scale,
             object_paths=initial_objects,

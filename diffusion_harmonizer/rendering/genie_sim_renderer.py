@@ -183,7 +183,7 @@ class GenieSimRenderer:
         extent = aligned.GetMax() - aligned.GetMin()
         return (float(extent[0]), float(extent[1]), float(extent[2]))
 
-    def fit_prim_max_extent(self, prim_path: str, target_max_extent: float, min_scale: float = 0.05, max_scale: float = 5.0) -> float | None:
+    def fit_prim_max_extent(self, prim_path: str, target_max_extent: float, min_scale: float = 0.05, max_scale: float = 20.0) -> float | None:
         """Uniformly scale a prim so its max bbox dimension reaches target size."""
 
         from pxr import Gf, UsdGeom
@@ -210,6 +210,23 @@ class GenieSimRenderer:
             scale = Gf.Vec3f(float(current_scale[0]) * factor, float(current_scale[1]) * factor, float(current_scale[2]) * factor)
         scale_op.Set(scale)
         return factor
+
+    def set_preview_surface_material(
+        self,
+        shader_path: str,
+        diffuse_color: tuple[float, float, float],
+        roughness: float | None = None,
+    ) -> None:
+        """Update a UsdPreviewSurface shader used by procedural scene geometry."""
+
+        from pxr import Gf, Sdf, UsdShade
+
+        prim = self.stage.GetPrimAtPath(shader_path)
+        shader = UsdShade.Shader(prim) if prim.IsValid() else UsdShade.Shader.Define(self.stage, shader_path)
+        shader.CreateIdAttr("UsdPreviewSurface")
+        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*[float(c) for c in diffuse_color]))
+        if roughness is not None:
+            shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(float(roughness))
 
     def set_articulation_joint_positions(self, prim_path: str, joint_positions: dict[str, float]) -> dict[str, float]:
         """Apply joint positions in radians, returning the joints that were applied.

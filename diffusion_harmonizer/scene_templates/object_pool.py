@@ -18,7 +18,8 @@ class ObjectPoolSampler:
     def __init__(self, index: AssetIndex, seed: int = 42):
         self.index = index
         self.rng = random.Random(seed)
-        self._all_objects = [path for path in index.objects() if path.suffix.lower() in {".usd", ".usda", ".usdc"}]
+        self._all_objects = [path for path in index.objects() if self._is_scene_asset(path)]
+        self._all_hdris = list(index.hdris())
 
     def sample(self, template: SceneTemplate, count: int | None = None) -> list[Path]:
         if not self._all_objects:
@@ -33,6 +34,19 @@ class ObjectPoolSampler:
         head = candidates[: max(requested * 4, requested)]
         return self.rng.sample(head, requested)
 
+    def sample_hdri(self, template: SceneTemplate) -> Path | None:
+        if not self._all_hdris:
+            return None
+        query_tokens = [token.strip().lower() for token in (template.hdri_query + "," + template.background_query).replace(" ", ",").split(",") if token.strip()]
+        ranked = []
+        for path in self._all_hdris:
+            low = str(path).lower()
+            score = sum(token in low for token in query_tokens)
+            ranked.append((score, self.rng.random(), path))
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        head = ranked[: min(4, len(ranked))]
+        return self.rng.choice(head)[2]
+
     def _ranked_candidates(self, template: SceneTemplate) -> list[Path]:
         ranked = []
         for path in self._all_objects:
@@ -41,3 +55,12 @@ class ObjectPoolSampler:
             ranked.append((score, self.rng.random(), path))
         ranked.sort(key=lambda item: (-item[0], item[1]))
         return [item[2] for item in ranked if item[0] > 0] or [item[2] for item in ranked]
+
+    @staticmethod
+    def _is_scene_asset(path: Path) -> bool:
+        if path.suffix.lower() not in {".usd", ".usda", ".usdc"}:
+            return False
+        low = "/" + str(path).lower().replace("\\", "/")
+        if any(token in low for token in ("/texture/", "/textures/", "/material/", "/materials/")):
+            return False
+        return True

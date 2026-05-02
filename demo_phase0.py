@@ -31,7 +31,12 @@ def _search_assets(index: AssetIndex, needles: list[str], count: int = 1, catego
     if category == "robot":
         paths = index.robots()
     elif category == "object":
-        paths = index.objects()
+        paths = [
+            path
+            for path in index.objects()
+            if path.suffix.lower() in {".usd", ".usda", ".usdc"}
+            and "/textures/" not in "/" + str(path).lower().replace("\\", "/") + "/"
+        ]
     else:
         paths = [Path(record.path) for record in index.records if Path(record.path).suffix.lower() in {".usd", ".usda", ".usdc"}]
     return _prefer(paths, needles, count=count)
@@ -66,7 +71,14 @@ def _filtered_hdris(index: AssetIndex, query: str | None = None) -> list[Path]:
     return [item[2] for item in ranked] or hdris
 
 
-def add_procedural_table(renderer, table_height: float = 0.72, table_size=(1.4, 0.9), table_thickness: float = 0.06) -> None:
+def add_procedural_table(
+    renderer,
+    table_height: float = 0.72,
+    table_size=(1.4, 0.9),
+    table_thickness: float = 0.06,
+    table_color=(0.72, 0.68, 0.60),
+    table_roughness: float = 0.58,
+) -> None:
     from pxr import Gf, Sdf, UsdGeom, UsdShade
 
     stage = renderer.stage
@@ -80,8 +92,8 @@ def add_procedural_table(renderer, table_height: float = 0.72, table_size=(1.4, 
     mat = UsdShade.Material.Define(stage, "/World/TableMat")
     shader = UsdShade.Shader.Define(stage, "/World/TableMat/Shader")
     shader.CreateIdAttr("UsdPreviewSurface")
-    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.55, 0.55, 0.52))
-    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.65)
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*[float(c) for c in table_color]))
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(float(table_roughness))
     mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
     UsdShade.MaterialBindingAPI(table).Bind(mat)
     UsdShade.MaterialBindingAPI(floor).Bind(mat)
@@ -96,6 +108,8 @@ def build_demo_scene(
     hdri_query: str | None = None,
     table_height: float = 0.72,
     table_size=(1.4, 0.9),
+    table_color=(0.72, 0.68, 0.60),
+    table_roughness: float = 0.58,
     object_z: float | None = None,
     object_scale: float = 0.8,
     object_paths: list[Path] | None = None,
@@ -115,7 +129,7 @@ def build_demo_scene(
         robots = _search_assets(index, robot_needles, count=1)
     objects = object_paths if object_paths is not None else _search_assets(index, ["cup", "box", "bottle", "can", "fruit", "block"], count=3, category="object")
     hdris = _filtered_hdris(index, query=hdri_query)
-    object_z = table_height + 0.002 if object_z is None else object_z
+    object_z = table_height if object_z is None else object_z
 
     referenced = {
         "backgrounds": [],
@@ -126,13 +140,21 @@ def build_demo_scene(
         "table_height": [str(table_height)],
         "table_size": [str(table_size[0]), str(table_size[1])],
         "object_z": [str(object_z)],
+        "table_color": [str(channel) for channel in table_color],
+        "table_roughness": [str(table_roughness)],
     }
     if backgrounds:
         scene_log(f"Opening background scene: {backgrounds[0]}")
         renderer.open_scene(str(backgrounds[0]))
         referenced["backgrounds"].append(str(backgrounds[0]))
     scene_log("Adding procedural floor/table")
-    add_procedural_table(renderer, table_height=table_height, table_size=table_size)
+    add_procedural_table(
+        renderer,
+        table_height=table_height,
+        table_size=table_size,
+        table_color=table_color,
+        table_roughness=table_roughness,
+    )
 
     if robots:
         scene_log(f"Referencing robot USD: {robots[0]}")
@@ -143,7 +165,7 @@ def build_demo_scene(
             rotate=robot_rotate,
             scale=(robot_scale, robot_scale, robot_scale),
         )
-        robot_delta = renderer.align_prim_bottom_to_z("/World/Robot", table_height + 0.002)
+        robot_delta = renderer.align_prim_bottom_to_z("/World/Robot", table_height)
         referenced["robots"].append(str(robots[0]))
         scene_log(f"Referenced robot USD; bottom alignment dz={robot_delta}")
     for idx, obj in enumerate(objects):
